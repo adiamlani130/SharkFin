@@ -4,15 +4,15 @@
 
 Full-featured stock analysis platform with AI predictions, portfolio tracking, and market intelligence.
 
-## 🚀 Features
+##  Features
 
-- **💼 Portfolio Management** - Track positions with real-time P&L
-- **🔍 Research Center** - Deep stock analysis with charts & news
-- **🔮 AI Predictions** - 4 ML models (Time-Series, Technical, ML, Fundamental)
-- **🏆 Top Performers** - AI-powered buy/sell recommendations across 650+ stocks
-- **📰 Financial News** - Curated market news with ML relevance scoring
+- ** Portfolio Management** - Track positions with real-time P&L
+- ** Research Center** - Deep stock analysis with charts & news
+- ** AI Predictions** - 4 ML models (Time-Series, Technical, ML, Fundamental)
+- ** Top Performers** - AI-powered buy/sell recommendations across 650+ stocks
+- ** Financial News** - Curated market news with ML relevance scoring
 
-## 📁 File Structure
+##  File Structure
 
 ```
 sharkfin/
@@ -28,7 +28,7 @@ sharkfin/
 └── README.md                      # This file
 ```
 
-## 🛠️ Local Setup
+##  Local Setup
 
 ```bash
 # Install dependencies
@@ -38,7 +38,7 @@ pip install -r streamlit_requirements.txt
 streamlit run streamlit_main.py
 ```
 
-## ☁️ Deploy to Streamlit Cloud (FREE)
+##  Deploy to Streamlit Cloud (FREE)
 
 1. Push code to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io)
@@ -47,7 +47,7 @@ streamlit run streamlit_main.py
 5. Set main file to `streamlit_main.py`
 6. Deploy!
 
-## 🌐 Deploy to Vercel
+##  Deploy to Vercel
 
 Streamlit apps require a server runtime. Use Streamlit Cloud instead, or:
 
@@ -56,7 +56,7 @@ Streamlit apps require a server runtime. Use Streamlit Cloud instead, or:
 
 **Recommended:** Use Streamlit Cloud for easiest deployment.
 
-## 📊 Tech Stack
+##  Tech Stack
 
 - **Frontend:** Streamlit
 - **Data:** Yahoo Finance API, Google News RSS
@@ -64,7 +64,7 @@ Streamlit apps require a server runtime. Use Streamlit Cloud instead, or:
 - **Charts:** Plotly
 - **Deployment:** Streamlit Cloud
 
-## 🎯 Usage
+##  Usage
 
 ### Home
 View market status and portfolio stats
@@ -92,46 +92,28 @@ View market status and portfolio stats
 - AI scoring based on technical + fundamental + ML signals
 - Top 5 BUY and Top 5 SELL recommendations
 
-## 🆚 Desktop vs Web Version
 
-### ✅ Same Features
-- All functionality identical
-- Same AI models
-- Same data sources
-- Same news feeds
+##  Configuration
 
-### 🔄 Different UI
-- Web-based instead of desktop app
-- Streamlit components instead of CustomTkinter
-- Tab-based navigation
-- Responsive design
-- Simplified layouts
 
-## ⚙️ Configuration
-
-### Logo
-Replace `sharkfin_logo.png` with your own logo (recommended size: 400x400px)
 
 ### Data Storage
 - Portfolio and watchlist saved to `portfolio.json` and `watchlist.json`
 - **Note:** On Streamlit Cloud, these files reset on app restart
 - For persistent storage, consider using Streamlit's database integrations
 
-## 📝 Notes
+##  Notes
 
 - **Free APIs:** Uses free Yahoo Finance + Google News RSS (no API keys needed)
 - **Rate Limits:** Yahoo Finance may throttle heavy usage
 - **Performance:** Initial load may be slow due to data fetching
 - **Top Performers:** Full scan takes 2-3 minutes for 650+ stocks
 
-## ⚠️ Disclaimer
+##  Disclaimer
 
 This software is for educational purposes only. Not financial advice. Consult a qualified financial advisor before making investment decisions.
 
-## 📄 License
-
-© 2024 SharkFin. All rights reserved.
 
 ---
 
-**Built with ❤️ by the SharkFin team**
+**Built by the SharkFin team**
