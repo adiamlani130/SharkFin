@@ -1,5 +1,6 @@
 """Offline stand-ins for the network data layer, used by the UI smoke tests."""
 
+import zlib
 from datetime import datetime, timedelta, timezone
 
 import numpy as np
@@ -22,8 +23,11 @@ def history(symbol, period="5y", interval="1d"):
     n = 1300
     c, rng = _series(symbol, n)
     idx = pd.bdate_range(end=pd.Timestamp("2026-09-28"), periods=n)
-    return pd.DataFrame({"Open": c, "High": c * 1.01, "Low": c * 0.99, "Close": c,
-                         "Volume": rng.integers(1e6, 5e6, n).astype(float)}, index=idx)
+    vol = rng.integers(1e6, 5e6, n).astype(float)
+    o = np.r_[c[0], c[:-1]] * (1 + rng.normal(0, 0.003, n))
+    hi = np.maximum(o, c) * (1 + np.abs(rng.normal(0, 0.006, n)))
+    lo = np.minimum(o, c) * (1 - np.abs(rng.normal(0, 0.006, n)))
+    return pd.DataFrame({"Open": o, "High": hi, "Low": lo, "Close": c, "Volume": vol}, index=idx)
 
 
 def download_prices(symbols, period="2y", field="Close", chunk=150):
@@ -33,6 +37,11 @@ def download_prices(symbols, period="2y", field="Close", chunk=150):
 def info(symbol):
     c, _ = _series(symbol)
     p = float(c[-1])
+    k = (zlib.crc32(symbol.encode()) % 97) / 97  # per-symbol variation so cross-sectional scores differ
+    return {**_base_info(symbol, p), "returnOnEquity": 0.1 + 0.4 * k, "grossMargins": 0.3 + 0.5 * k, "forwardPE": 30 - 15 * k}
+
+
+def _base_info(symbol, p):
     return {"longName": f"{symbol} Inc.", "shortName": symbol, "currentPrice": p, "previousClose": p * 0.99,
             "sector": "Technology", "industry": "Software", "marketCap": p * 1e9, "sharesOutstanding": 1e9,
             "totalDebt": 5e10, "totalCash": 3e10, "trailingPE": 25.0, "forwardPE": 22.0, "enterpriseToEbitda": 18.0,
@@ -76,10 +85,48 @@ def install(monkeypatch):
     monkeypatch.setattr(data, "quarterly_financials", financials)
     monkeypatch.setattr(data, "news", news)
     monkeypatch.setattr(data, "risk_free_rate", lambda: 0.042)
-    monkeypatch.setattr(data, "analyst_data", lambda s: {})
+    monkeypatch.setattr(data, "analyst_data", analyst_data)
+    monkeypatch.setattr(data, "download_ohlcv", download_ohlcv)
+    monkeypatch.setattr(data, "sec_filings", sec_filings)
+    monkeypatch.setattr(data, "sec_document_text", sec_document_text)
+    monkeypatch.setattr(data, "market_history", lambda period="10y": history("SPY", period))
     monkeypatch.setattr(data, "search", lambda q: [(q.upper(), q.upper())])
     monkeypatch.setattr(data, "infos", lambda syms, workers=8: pd.DataFrame([info(s) for s in syms], index=list(syms)))
     monkeypatch.setattr(data, "peers_for", lambda s, inf, max_peers=15: [x for x in SYMS if x != s][:10])
     monkeypatch.setattr(data, "sp500_table", lambda: pd.DataFrame({"Symbol": SYMS, "Name": SYMS, "Sector": ["Tech"] * len(SYMS),
                                                                     "SubIndustry": ["Software"] * len(SYMS)}))
     monkeypatch.setattr(data, "universe", lambda name: SYMS)
+
+
+def download_ohlcv(symbols, period="2y", chunk=150):
+    frames = {s: history(s) for s in symbols}
+    return {f: pd.DataFrame({s: d[f] for s, d in frames.items()}) for f in ("Open", "High", "Low", "Close", "Volume")}
+
+
+def analyst_data(symbol):
+    idx = pd.to_datetime(["2026-10-20", "2026-07-20", "2026-04-20", "2026-01-20", "2025-10-20"])
+    ed = pd.DataFrame({"EPS Estimate": [2.0, 1.9, 1.8, 1.7, 1.6], "Reported EPS": [np.nan, 2.1, 1.85, 1.65, 1.7],
+                       "Surprise(%)": [np.nan, 10.5, 2.8, -2.9, 6.25]}, index=idx)
+    ins = pd.DataFrame({"Shares": [1000, 500, 2000], "Value": [150000.0, 70000.0, 300000.0],
+                        "Text": ["Purchase at price 150.00 per share.", "Purchase at price 140.00 per share.",
+                                 "Sale at price 150.00 per share."],
+                        "Insider": ["DOE JANE", "ROE RICHARD", "DOE JANE"], "Position": ["CEO", "Director", "CEO"],
+                        "Start Date": pd.to_datetime(["2026-09-01", "2026-08-15", "2026-06-01"])})
+    rev = pd.DataFrame({"upLast7days": [1, 2], "upLast30days": [5, 6], "downLast30days": [1, 0], "downLast7Days": [0, 0]},
+                       index=["0q", "+1y"])
+    return {"earnings_dates": ed, "insider_transactions": ins, "eps_revisions": rev}
+
+
+def sec_filings(symbol, forms=("10-K", "10-Q", "8-K"), limit=40):
+    return pd.DataFrame({"form": ["10-Q", "8-K", "10-K", "10-K"],
+                         "filed": pd.to_datetime(["2026-08-01", "2026-07-20", "2026-02-01", "2025-02-01"]),
+                         "reportDate": ["2026-06-30", "2026-07-20", "2025-12-31", "2024-12-31"],
+                         "what": ["", "Earnings results", "", ""],
+                         "url": ["https://example.com/q", "https://example.com/8k", "https://example.com/k1",
+                                 "https://example.com/k0"]})
+
+
+def sec_document_text(url):
+    base = "Item 1A. Risk Factors " + "Our business faces competition from many rivals in every market we serve. " * 60
+    extra = "New tariffs on imported components could materially raise our costs and hurt margins next year. " * 20
+    return base + (extra if url.endswith("k1") else "") + " Item 1B. Unresolved Staff Comments none."
