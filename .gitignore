@@ -208,7 +208,6 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 .streamlit/cache/
-.streamlit/config.toml
 
 # Virtual environments
 venv/
@@ -224,3 +223,8 @@ env/
 # VS Code (optional but common)
 .vscode/
 
+
+# SharkFin local data
+.sharkfin/
+portfolio.json
+watchlist.json
