@@ -142,6 +142,36 @@ def download_prices(symbols: tuple, period: str = "2y", field: str = "Close", ch
     return out.loc[:, ~out.columns.duplicated()].dropna(how="all")
 
 
+@ttl_cache(1800)
+def download_ohlcv(symbols: tuple, period: str = "2y", chunk: int = 150) -> dict:
+    """Batched OHLCV download: {"Open"|"High"|"Low"|"Close"|"Volume": DataFrame (dates x tickers)}."""
+    fields = ("Open", "High", "Low", "Close", "Volume")
+    parts: dict = {f: [] for f in fields}
+    syms = list(dict.fromkeys(symbols))
+    for i in range(0, len(syms), chunk):
+        part = syms[i:i + chunk]
+        try:
+            raw = _yf().download(part, period=period, auto_adjust=True, progress=False, threads=True, group_by="column")
+        except Exception as e:  # pragma: no cover - network
+            log.warning("OHLCV chunk failed: %s", e)
+            continue
+        if raw is None or raw.empty:
+            continue
+        for f in fields:
+            if isinstance(raw.columns, pd.MultiIndex):
+                if f in raw.columns.get_level_values(0):
+                    parts[f].append(raw[f])
+            elif f in raw.columns:
+                parts[f].append(raw[[f]].rename(columns={f: part[0]}))
+    out = {}
+    for f, frames in parts.items():
+        if frames:
+            df = pd.concat(frames, axis=1)
+            df.index = _naive(df.index)
+            out[f] = df.loc[:, ~df.columns.duplicated()]
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Fundamentals
 # ---------------------------------------------------------------------------
@@ -444,3 +474,86 @@ def news(query: str, symbol: str | None = None) -> list:
             seen.add(k)
             out.append(a)
     return out
+
+
+# ---------------------------------------------------------------------------
+# SEC EDGAR (filings)
+# ---------------------------------------------------------------------------
+
+# The SEC asks automated clients to identify themselves. Set SEC_USER_AGENT
+# (e.g. "SharkFin you@example.com") as an environment variable or Streamlit
+# secret to use your own contact.
+SEC_FORM_ITEMS = {
+    "1.01": "Material agreement", "1.02": "Agreement terminated", "1.05": "Cybersecurity incident",
+    "2.01": "Acquisition or sale of assets", "2.02": "Earnings results", "2.03": "New debt",
+    "2.05": "Restructuring / layoffs", "2.06": "Impairment", "3.01": "Listing notice",
+    "4.01": "Auditor change", "4.02": "Restatement", "5.01": "Change in control", "5.02": "Executive/director change",
+    "5.03": "Bylaw change", "5.07": "Shareholder vote", "7.01": "Reg FD disclosure", "8.01": "Other events",
+    "9.01": "Exhibits",
+}
+
+
+def _sec_get(url: str, timeout: int = 20):
+    import os
+
+    import requests
+
+    ua = os.environ.get("SEC_USER_AGENT") or "SharkFin research app (github.com/adiamlani130/SharkFin)"
+    r = requests.get(url, headers={"User-Agent": ua, "Accept-Encoding": "gzip, deflate"}, timeout=timeout)
+    r.raise_for_status()
+    return r
+
+
+@ttl_cache(24 * 3600)
+def sec_cik(symbol: str) -> int | None:
+    try:
+        table = _sec_get("https://www.sec.gov/files/company_tickers.json").json()
+    except Exception as e:  # pragma: no cover - network
+        log.warning("SEC ticker map failed: %s", e)
+        return None
+    sym = symbol.upper().replace("-", ".")
+    for row in table.values():
+        if str(row.get("ticker", "")).upper() in (sym, symbol.upper()):
+            return int(row["cik_str"])
+    return None
+
+
+@ttl_cache(6 * 3600)
+def sec_filings(symbol: str, forms: tuple = ("10-K", "10-Q", "8-K"), limit: int = 40) -> pd.DataFrame:
+    """Recent filings with links, newest first. Empty frame if EDGAR is unreachable."""
+    cik = sec_cik(symbol)
+    if not cik:
+        return pd.DataFrame()
+    try:
+        sub = _sec_get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json").json()
+    except Exception as e:  # pragma: no cover - network
+        log.warning("SEC submissions(%s) failed: %s", symbol, e)
+        return pd.DataFrame()
+    rec = pd.DataFrame(sub.get("filings", {}).get("recent", {}))
+    if rec.empty:
+        return rec
+    rec = rec[rec["form"].isin(forms)].head(limit).copy()
+    acc = rec["accessionNumber"].str.replace("-", "", regex=False)
+    rec["url"] = [f"https://www.sec.gov/Archives/edgar/data/{cik}/{a}/{d}" for a, d in zip(acc, rec["primaryDocument"])]
+    rec["filed"] = pd.to_datetime(rec["filingDate"], errors="coerce")
+    items = rec.get("items", pd.Series("", index=rec.index)).fillna("")
+    rec["what"] = [", ".join(SEC_FORM_ITEMS.get(i.strip(), i.strip()) for i in str(s).split(",") if i.strip() and i.strip() != "9.01")
+                   for s in items]
+    return rec[["form", "filed", "reportDate", "what", "url"]].reset_index(drop=True)
+
+
+@ttl_cache(24 * 3600)
+def sec_document_text(url: str) -> str:
+    from .catalysts import html_to_text
+
+    try:
+        return html_to_text(_sec_get(url, timeout=40).text)
+    except Exception as e:  # pragma: no cover - network
+        log.warning("SEC document %s failed: %s", url, e)
+        return ""
+
+
+@ttl_cache(900)
+def market_history(period: str = "10y") -> pd.DataFrame:
+    """SPY history, used as the market-uptrend filter."""
+    return history("SPY", period)

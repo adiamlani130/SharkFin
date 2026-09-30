@@ -5,7 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import data, factors, risk, ui
+from sharkfin import catalysts, data, factors, risk, swing, ui
+from sharkfin.explain import tip
 
 st.title("Top Performers")
 st.caption("Every stock in the universe is scored on documented return factors (momentum, trend, low risk, value, "
@@ -63,6 +64,32 @@ def factor_backtest(symbols: tuple, weights: tuple):
     return factors.backtest_price_composite(long, theme_weights=dict(weights))
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def swing_scan(symbols: tuple) -> pd.DataFrame:
+    ohlcv = data.download_ohlcv(symbols, period="2y")
+    if "Close" not in ohlcv:
+        return pd.DataFrame()
+    mkt = data.market_history("2y")
+    mc = mkt["Close"] if not mkt.empty else None
+    rows = []
+    for s_ in ohlcv["Close"].columns:
+        try:
+            df = pd.DataFrame({f: ohlcv[f][s_] for f in ("Open", "High", "Low", "Close", "Volume") if f in ohlcv}).dropna()
+            if len(df) < 260 or "Volume" not in df:
+                continue
+            plan = swing.trade_plan(df.iloc[-320:], mc)
+        except Exception:
+            continue
+        if plan["tone"] == "neg":
+            continue
+        rows.append({"Symbol": s_, "Status": "Triggered" if plan["triggered"] else "Forming", "Score": plan["score"],
+                     "Price": plan["price"], "Entry": plan["entry"], "Stop": plan["stop"], "Risk %": plan["risk_pct"],
+                     "T1": plan["t1"], "T2": plan["t2"], "Resistance": plan["resistance"], "Weekly": plan["weekly"]["label"]})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).set_index("Symbol").sort_values(["Status", "Score"], ascending=[False, False])
+
+
 syms = get_universe(uni_name)
 if len(syms) < 5:
     st.info("Add at least 5 stocks to your watchlist/portfolio to scan them, or pick an index universe.")
@@ -79,7 +106,7 @@ if st.button(f"Run scan on {len(syms)} stocks", type="primary", width="stretch")
 
     themes = [t for t in factors.DEFAULT_THEME_WEIGHTS if t in scores.columns]
     top_n = min(top_n, len(scores) // 2)
-    tabs = st.tabs(["🏆 Rankings", "🗺️ Factor map", "📊 Backtest"])
+    tabs = st.tabs(["🏆 Rankings", "🎯 Swing setups", "🏛️ Core longs", "🗺️ Factor map", "📊 Backtest"])
 
     def card(row, sym, kind):
         pos, neg = factors.explain(row)
@@ -116,6 +143,59 @@ if st.button(f"Run scan on {len(syms)} stocks", type="primary", width="stretch")
         st.download_button("Download ranking (CSV)", scores[show].to_csv().encode(), "sharkfin_scan.csv", "text/csv")
 
     with tabs[1]:
+        st.markdown("Stocks where the **Confluence Pullback** swing setup (see Strategy Lab) has triggered today or is forming: "
+                    "market and stock in an uptrend, a pullback to the 20 EMA / 50 SMA, and enough confirming signals.",
+                    help=tip("trade_status"))
+        if st.button(f"Find swing setups in {px.shape[1]} stocks", key="swing_scan"):
+            st.session_state.swing_ran = True
+        if st.session_state.get("swing_ran"):
+            with st.spinner("Checking every chart…"):
+                setups = swing_scan(tuple(px.columns))
+            if setups.empty:
+                st.info("No stock passes the must-pass rules today. That's normal in a weak or choppy market.")
+            else:
+                setups = setups.join(scores[["Name", "Sector", "Composite"]], how="left")
+                st.dataframe(setups, width="stretch", column_config={
+                    "Status": st.column_config.TextColumn(help=tip("trade_status")),
+                    "Score": st.column_config.ProgressColumn(min_value=0, max_value=6, format="%d",
+                                                             help=tip("min_score")),
+                    "Price": st.column_config.NumberColumn(format="$%.2f"),
+                    "Entry": st.column_config.NumberColumn(format="$%.2f", help=tip("entry")),
+                    "Stop": st.column_config.NumberColumn(format="$%.2f", help=tip("stop")),
+                    "Risk %": st.column_config.NumberColumn(format="percent", help=tip("risk_r")),
+                    "T1": st.column_config.NumberColumn(format="$%.2f", help=tip("t1")),
+                    "T2": st.column_config.NumberColumn(format="$%.2f", help=tip("t2")),
+                    "Resistance": st.column_config.NumberColumn(format="$%.2f", help=tip("resistance")),
+                    "Composite": st.column_config.NumberColumn("Factor score", format="%.2f"),
+                })
+                st.caption("Open a ticker on Research → Trade Setup for the full checklist and chart.")
+
+    with tabs[2]:
+        st.markdown("Candidates for a passive, long-term core: **above-average quality** within their sector, **not expensive**, "
+                    "and a **positive 12-month trend** so you avoid value traps. Ranked by 40% quality, 30% value, "
+                    "20% momentum, 10% analyst views.", help=tip("core_long"))
+        core = catalysts.core_long_screen(scores) if use_fund else pd.DataFrame()
+        if not use_fund:
+            st.info("Turn on **Include fundamentals & analyst data** above to build the core-long list.")
+        elif core.empty:
+            st.info("No stock passes all the core-long filters in this universe right now.")
+        else:
+            cols = [c for c in ("Name", "Sector", "Price", "Core score", "Quality", "Value", "Momentum", "Analysts",
+                                "roe", "fcf_yield", "earnings_yield", "mom_12_1") if c in core]
+            st.dataframe(core[cols], width="stretch", column_config={
+                "Price": st.column_config.NumberColumn(format="$%.2f"),
+                "Core score": st.column_config.NumberColumn(format="%.2f", help="Weighted blend of the theme scores (σ vs sector peers)."),
+                **{t: st.column_config.NumberColumn(format="%.2f", help="Standard deviations above (+) or below (−) sector peers.")
+                   for t in ("Quality", "Value", "Momentum", "Analysts")},
+                "roe": st.column_config.NumberColumn("ROE", format="percent"),
+                "fcf_yield": st.column_config.NumberColumn("FCF yield", format="percent"),
+                "earnings_yield": st.column_config.NumberColumn("Earnings yield", format="percent"),
+                "mom_12_1": st.column_config.NumberColumn("12-1M momentum", format="percent"),
+            })
+            st.caption("For a passive fallback, hold 15-30 of these across sectors and rebalance quarterly, rather than "
+                       "concentrating. Check each one on Research → Trade Setup (long-term checklist) and News Desk → Catalysts.")
+
+    with tabs[3]:
         sel = pd.concat([scores.head(top_n), scores.tail(top_n)])
         fig = go.Figure(go.Heatmap(z=sel[themes].values, x=themes, y=sel.index, zmid=0,
                                    colorscale=[[0, ui.RED], [0.5, "#1f2937"], [1, ui.GREEN]],
@@ -130,7 +210,7 @@ if st.button(f"Run scan on {len(syms)} stocks", type="primary", width="stretch")
             fig.update_layout(title="Average composite by sector")
             ui.plotly(fig, 420)
 
-    with tabs[2]:
+    with tabs[4]:
         st.markdown("Backtest of the **price-based** themes (momentum, trend, low risk, reversal) over ~5 years: each month, "
                     "buy the top 20% of the universe equal-weighted, net of 10 bps trading costs. Fundamental themes are "
                     "excluded because point-in-time fundamentals aren't available for free.")

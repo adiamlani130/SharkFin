@@ -5,7 +5,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import ai, data, risk, sentiment, ui, valuation
+from sharkfin import ai, catalysts, data, risk, sentiment, swing, ui, valuation
+from sharkfin.explain import tip
 from sharkfin import indicators as ind
 
 st.title("Research & Valuation")
@@ -98,7 +99,7 @@ total_cash = ui.num(inf.get("totalCash"), valuation._v(fin.cash(), 0, 0.0))
 net_debt = (total_debt if np.isfinite(total_debt) else 0) - (total_cash if np.isfinite(total_cash) else 0)
 is_financial = str(inf.get("sector", "")).lower().startswith("financial")
 
-tabs = st.tabs(["📈 Chart & Stats", "💰 Valuation Lab", "🧪 Quality", "🧾 Financials", "🎯 Analysts", "📰 News", "🤖 AI Analyst"])
+tabs = st.tabs(["📈 Chart & Stats", "🎯 Trade Setup", "💰 Valuation Lab", "🧪 Quality", "🧾 Financials", "🎯 Analysts", "📰 News", "🤖 AI Analyst"])
 
 # ---------------------------------------------------------------------------
 # Chart & stats
@@ -145,10 +146,78 @@ with tabs[0]:
             st.write(inf["longBusinessSummary"])
 
 # ---------------------------------------------------------------------------
+# Trade setup: swing entry/exit plan and long-term (core long) checklist
+# ---------------------------------------------------------------------------
+plan, core = {}, {}
+with tabs[1]:
+    mkt = data.market_history("5y")
+    plan = swing.trade_plan(hist, mkt["Close"] if not mkt.empty else None)
+    ad_ts = data.analyst_data(sym)
+    earn = catalysts.earnings_summary(ad_ts.get("earnings_dates"))
+    ins = catalysts.insider_summary(ad_ts.get("insider_transactions"))
+    core = catalysts.core_long_checklist(inf, fin, hist, ad_ts, ins, earn)
+    wk = plan["weekly"]
+
+    st.markdown("#### Short term: swing trade (days to weeks)", help=tip("trade_status"))
+    st.markdown(ui.pill(ui.esc(plan["status"]), plan["tone"]) +
+                f"<span class='sf-muted'>Confluence score {plan['score']}/{plan['max_score']} (need {plan['need']}) · "
+                f"weekly trend: {wk['label']}</span>", unsafe_allow_html=True)
+    m = st.columns(6)
+    m[0].metric("Entry", ui.fmt_money(plan["entry"]), help=tip("entry"))
+    m[1].metric("Stop", ui.fmt_money(plan["stop"]),
+                ui.fmt_pct(-plan["risk_pct"], 1) if np.isfinite(plan["risk_pct"]) else None, help=tip("stop"))
+    m[2].metric("T1 (1.5R)", ui.fmt_money(plan["t1"]), help=tip("t1"))
+    m[3].metric("T2 (3R)", ui.fmt_money(plan["t2"]), help=tip("t2"))
+    m[4].metric("Nearest resistance", ui.fmt_money(plan["resistance"]), help=tip("resistance"))
+    m[5].metric("Nearest support", ui.fmt_money(plan["support"]), help=tip("support"))
+    if np.isfinite(plan["resistance"]) and np.isfinite(plan["t1"]) and plan["resistance"] < plan["t1"]:
+        st.warning("Resistance sits below T1: the move may stall before the first target. Consider taking profit near resistance.")
+    if plan["divergence_recent"]:
+        st.warning("RSI bearish divergence in the last 10 days: momentum is fading even as price makes highs. Tighten stops on existing longs.")
+
+    view = hist.iloc[-160:]
+    fig = go.Figure(go.Candlestick(x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"],
+                                   name=sym, increasing_line_color=ui.GREEN, decreasing_line_color=ui.RED))
+    c_full = hist["Close"]
+    for lbl, series in (("EMA 20", ind.ema(c_full, 20)), ("SMA 50", ind.sma(c_full, 50)), ("SMA 200", ind.sma(c_full, 200))):
+        fig.add_scatter(x=view.index, y=series.reindex(view.index), name=lbl, line=dict(width=1.2))
+    lo_v, hi_v = view["Low"].min(), view["High"].max()
+    for z in plan["zones"]:
+        if lo_v * 0.9 <= z["mid"] <= hi_v * 1.1:
+            color = "rgba(255,77,109,0.13)" if z["kind"] == "resistance" else "rgba(0,214,143,0.13)"
+            fig.add_hrect(y0=z["low"] - 0.002 * z["mid"], y1=z["high"] + 0.002 * z["mid"], fillcolor=color, line_width=0)
+    for lvl, lbl, colr in ((plan["entry"], "Entry", ui.BLUE), (plan["stop"], "Stop", ui.RED), (plan["t1"], "T1", ui.GREEN),
+                           (plan["t2"], "T2", ui.GREEN)):
+        if np.isfinite(lvl):
+            fig.add_hline(y=lvl, line=dict(color=colr, dash="dash", width=1), annotation_text=lbl, annotation_position="right")
+    fig.update_layout(title="Daily chart: support (green) and resistance (red) zones, with the trade plan",
+                      xaxis_rangeslider_visible=False, hovermode="x unified")
+    fig.update_yaxes(range=[lo_v * 0.95, max(hi_v, np.nan_to_num(plan["t2"], nan=hi_v)) * 1.03])
+    ui.plotly(fig, 480)
+
+    st.dataframe(pd.DataFrame(plan["checklist"]).drop(columns="key"), hide_index=True, width="stretch", column_config={
+        "Pass": st.column_config.CheckboxColumn(), "Why it matters": st.column_config.TextColumn(width="large")})
+    st.caption("Rules are evaluated on daily bars. Test how this setup has actually performed on this stock in Strategy Lab "
+               "(Confluence Pullback), where every rule can be switched on or off.")
+
+    st.markdown("#### Long term: core holding (months to years)", help=tip("core_long"))
+    st.markdown(ui.pill(core["verdict"], core["tone"]) +
+                f"<span class='sf-muted'>{core['passed']}/{core['total']} checks passed</span>", unsafe_allow_html=True)
+    st.dataframe(pd.DataFrame(core["rows"]), hide_index=True, width="stretch", column_config={
+        "Pass": st.column_config.CheckboxColumn(), "Why it matters": st.column_config.TextColumn(width="large")})
+    k = st.columns(3)
+    k[0].markdown(f"**Earnings**  \n{ui.esc(earn['note'])}" +
+                  (f"  \nNext report: **{earn['next_date']:%b %d, %Y}**" if earn.get("next_date") is not None else ""))
+    k[1].markdown(f"**Insiders**  \n{ui.esc(ins['note'])}")
+    vr = catalysts.volume_read(hist)
+    k[2].markdown(f"**Volume**  \n{ui.esc(vr['note'])}")
+    st.caption("More catalysts (SEC filings, 8-K events, 10-K language changes, buybacks) are on News Desk → Catalysts.")
+
+# ---------------------------------------------------------------------------
 # Valuation lab
 # ---------------------------------------------------------------------------
 dcf_out = {}
-with tabs[1]:
+with tabs[2]:
     raw_beta, adj_beta = market_beta(sym)
     beta0 = adj_beta if np.isfinite(adj_beta) else ui.num(inf.get("beta"), 1.0)
     ttm_fcf = data.ttm(qfin.fcf())
@@ -302,7 +371,7 @@ with tabs[1]:
 # Quality
 # ---------------------------------------------------------------------------
 quality = {}
-with tabs[2]:
+with tabs[3]:
     f_score = valuation.piotroski_f_score(fin)
     z = valuation.altman_z(fin, mcap)
     qm = valuation.quality_metrics(fin, mcap)
@@ -336,7 +405,7 @@ with tabs[2]:
 # ---------------------------------------------------------------------------
 # Financials
 # ---------------------------------------------------------------------------
-with tabs[3]:
+with tabs[4]:
     period = st.segmented_control("Period", ["Annual", "Quarterly"], default="Annual", key="fin_period")
     F = fin if period != "Quarterly" else qfin
     lines = {"Revenue": F.revenue(), "Gross profit": F.gross_profit(), "Operating income": F.ebit(),
@@ -367,7 +436,7 @@ with tabs[3]:
 # Analysts
 # ---------------------------------------------------------------------------
 analyst = {}
-with tabs[4]:
+with tabs[5]:
     ad = data.analyst_data(sym)
     lo_t, mean_t, hi_t = ui.num(inf.get("targetLowPrice")), ui.num(inf.get("targetMeanPrice")), ui.num(inf.get("targetHighPrice"))
     analyst = {"target_low": lo_t, "target_mean": mean_t, "target_high": hi_t,
@@ -415,7 +484,7 @@ with tabs[4]:
 # News
 # ---------------------------------------------------------------------------
 news_agg, ranked = {}, []
-with tabs[5]:
+with tabs[6]:
     arts = data.news(f"{name} {sym}", symbol=sym)
     ranked = sentiment.rank_articles(arts, f"{sym} {name}")
     news_agg = sentiment.aggregate_sentiment(ranked[:30])
@@ -436,7 +505,7 @@ with tabs[5]:
 # ---------------------------------------------------------------------------
 # AI analyst
 # ---------------------------------------------------------------------------
-with tabs[6]:
+with tabs[7]:
     st.markdown("Claude reads everything SharkFin computed for this stock (valuation, quality, analyst data, "
                 "news and the price data) and writes a structured research note.")
     if not ai.available():
@@ -456,6 +525,10 @@ with tabs[6]:
             "growth": {"revenue_growth_yoy": rev_g, "earnings_growth_yoy": analyst_g, "revenue_cagr_3y": fin.revenue_cagr(3)},
             "dcf": dcf_out or "not applicable", "quality": quality, "analysts": analyst,
             "news_sentiment": news_agg,
+            "swing_setup": {k: plan.get(k) for k in ("status", "score", "max_score", "entry", "stop", "t1", "t2",
+                                                      "resistance", "support")} if plan else None,
+            "weekly_trend": plan.get("weekly") if plan else None,
+            "core_long": {"verdict": core.get("verdict"), "passed": core.get("passed"), "total": core.get("total")} if core else None,
             "headlines": [{"title": a["title"], "sentiment": round(a["sentiment"], 2), "publisher": a.get("publisher")}
                           for a in ranked[:15]],
         }

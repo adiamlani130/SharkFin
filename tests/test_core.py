@@ -241,3 +241,113 @@ def test_rank_and_dedupe():
     ranked = sentiment.rank_articles(arts, "nvidia earnings")
     assert len(ranked) == 2
     assert "Nvidia" in ranked[0]["title"]
+
+
+# --------------------------------------------------------------------- swing / confluence
+
+def _swing_ohlcv(n=1500, seed=3):
+    from tests.conftest import make_ohlcv
+    df = make_ohlcv(n, drift=0.0008, seed=seed)
+    rng = np.random.default_rng(seed + 1)
+    df["Open"] = df["Close"].shift(1).fillna(df["Close"]) * (1 + rng.normal(0, 0.003, n))
+    df["High"] = df[["High", "Open", "Close"]].max(axis=1)
+    df["Low"] = df[["Low", "Open", "Close"]].min(axis=1)
+    return df
+
+
+def test_swing_rules_have_no_lookahead():
+    from sharkfin import swing
+    df = _swing_ohlcv()
+    full = swing.rule_frame(df)
+    part = swing.rule_frame(df.iloc[:900])
+    cols = ["signal", "score", "stop", "resistance", "divergence"]
+    pd.testing.assert_frame_equal(full[cols].iloc[:900], part[cols], check_exact=False)
+
+
+def test_swing_simulator_fills_next_open_and_respects_stops():
+    from sharkfin import swing
+    df = _swing_ohlcv()
+    res = swing.backtest(df, cost_bps=0)
+    tr = res["trades"]
+    assert len(tr) > 5
+    rules = res["rules"]
+    for _, t in tr.iterrows():
+        i = df.index.get_loc(t["Entry date"])
+        assert t["Entry"] == pytest.approx(df["Open"].iloc[i])
+        assert rules["signal"].iloc[i - 1]  # signal on the prior close
+        assert t["Stop"] < t["Entry"]
+    stops = tr[tr["Exit reason"] == "Stop"]
+    assert (stops["R multiple"] >= -1 - 1e-9).all()
+    ts = res["trade_stats"]
+    assert 0 <= ts["Win rate"] <= 1 and ts["Trades"] == (tr["Exit reason"] != "Open").sum()
+    # With no costs and rf = 0, equity compounds exactly the per-trade returns.
+    assert res["equity"].iloc[-1] == pytest.approx(float(np.prod(1 + tr["Return"])), rel=1e-9)
+
+
+def test_swing_params_change_trades_and_ablation():
+    from sharkfin import swing
+    df = _swing_ohlcv()
+    loose = swing.backtest(df, {"min_score": 0})["trade_stats"]["Trades"]
+    strict = swing.backtest(df, {"min_score": 6})["trade_stats"]["Trades"]
+    assert loose >= strict
+    abl = swing.ablation(df)
+    assert "Without: Stock uptrend" in abl.index and "Score ≥ 0" in abl.index
+    assert not swing.rule_report(swing.backtest(df)["trades"]).empty
+
+
+def test_trade_plan_levels_are_ordered():
+    from sharkfin import swing
+    df = _swing_ohlcv()
+    for end in (600, 900, 1200, 1500):
+        plan = swing.trade_plan(df.iloc[:end])
+        assert plan["status"]
+        if np.isfinite(plan["entry"]) and np.isfinite(plan["stop"]):
+            assert plan["stop"] < plan["entry"] < plan["t1"] < plan["t2"]
+        assert all(z["low"] <= z["high"] for z in plan["zones"])
+    assert backtest.run(df, "Confluence Pullback")["stats"]["Trades"] >= 0
+
+
+def test_rsi_divergence_detects_lower_momentum_high():
+    from sharkfin import swing
+    high = pd.Series([10, 11, 12, 13, 12, 11, 11.5, 12, 12.5, 13.5], dtype=float)
+    rsi = pd.Series([50, 60, 70, 75, 65, 55, 58, 62, 64, 68], dtype=float)
+    div = swing.rsi_bearish_divergence(high, rsi, window=8)
+    assert div.iloc[-1] and not div.iloc[:-1].any()
+
+
+# --------------------------------------------------------------------- catalysts
+
+def test_earnings_and_insider_summaries():
+    from sharkfin import catalysts
+    from tests import fakes
+    ad = fakes.analyst_data("AAPL")
+    e = catalysts.earnings_summary(ad["earnings_dates"], now=pd.Timestamp("2026-09-01"))
+    assert e["last_surprise"] == pytest.approx(0.105)
+    assert e["drift_window"] and e["beats_last4"] == 3
+    assert e["next_date"] == pd.Timestamp("2026-10-20")
+    ins = catalysts.insider_summary(ad["insider_transactions"], now=pd.Timestamp("2026-09-30"))
+    assert ins["buys"] == 2 and ins["buyers"] == 2 and ins["cluster"] and ins["sells"] == 1
+    assert catalysts.revision_balance(ad["eps_revisions"]) == pytest.approx(10 / 12)
+
+
+def test_filing_change_finds_new_risk_language():
+    from sharkfin import catalysts
+    from tests import fakes
+    toc = "Table of contents Item 1A. Risk Factors 12 Item 1B. Unresolved Staff Comments 20 "
+    old = toc + fakes.sec_document_text("https://example.com/k0")
+    new = toc + fakes.sec_document_text("https://example.com/k1")
+    assert len(catalysts.risk_factors_section(new)) > 1000
+    ch = catalysts.filing_change(old, new)
+    assert ch["section"].startswith("Risk factors")
+    assert 0 < ch["similarity"] < 0.99
+    assert any("tariffs" in s for s in ch["new_sentences"])
+    assert catalysts.text_similarity("same words here", "same words here") == pytest.approx(1.0)
+    assert catalysts.html_to_text("<p>Hello&nbsp;<b>world</b></p><script>x()</script>") == "Hello world"
+
+
+def test_core_long_screen_filters_value_traps():
+    from sharkfin import catalysts
+    df = pd.DataFrame({"Quality": [1.0, 1.2, -0.5, 0.8], "Value": [0.5, 0.2, 1.0, -1.0], "Momentum": [0.3, -0.2, 0.5, 0.1],
+                       "mom_12_1": [0.2, -0.1, 0.3, 0.1], "trend_200": [0.05, -0.02, 0.1, 0.02]}, index=list("ABCD"))
+    out = catalysts.core_long_screen(df)
+    assert list(out.index) == ["A"]  # B has negative momentum, C low quality, D expensive

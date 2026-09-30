@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
-from . import risk
+from . import risk, swing
 
 
 @dataclass
@@ -36,7 +36,13 @@ STRATEGIES = {
                                      {"lookback": 252}),
     "Vol-Targeted Trend": Strategy("Vol-Targeted Trend", "200-day trend filter with position size scaled to hit a target volatility.",
                                    {"target_vol": 0.15, "sma": 200}),
+    "Confluence Pullback": Strategy("Confluence Pullback",
+                                    "Long-only swing system: in a market and stock uptrend, buy a pullback to the 20 EMA / "
+                                    "50 SMA when price closes above the prior day's high and enough confluences line up "
+                                    "(volume, RSI, MACD, OBV, room to resistance). Stop under the pullback, part off at "
+                                    "T1, trail the rest under the 20 EMA.", {}),
 }
+TRADE_BASED = {"Confluence Pullback"}
 
 
 def positions(ohlcv: pd.DataFrame, name: str, params: dict | None = None) -> pd.Series:
@@ -84,6 +90,10 @@ def positions(ohlcv: pd.DataFrame, name: str, params: dict | None = None) -> pd.
 
 def run(ohlcv: pd.DataFrame, name: str, params: dict | None = None, cost_bps: float = 5.0,
         rf: float = 0.0) -> dict:
+    if name in TRADE_BASED:
+        params = dict(params or {})
+        market = params.pop("market", None)
+        return swing.backtest(ohlcv, params, cost_bps, rf, market)
     c = ohlcv["Close"]
     asset_ret = c.pct_change(fill_method=None).fillna(0.0)
     pos = positions(ohlcv, name, params)
