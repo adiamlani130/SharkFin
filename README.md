@@ -1,4 +1,4 @@
-# 🦈 SharkFin
+# 🦈 SharkFin  (https://sharkfin.streamlit.app/)
 
 **Quant-grade stock research in your browser.** SharkFin combines validated probabilistic forecasting, a full valuation lab, a multi-factor stock scanner, portfolio risk analytics and optimization, a strategy backtester, and an optional AI analyst, all built on free data (Yahoo Finance and RSS news).
 
