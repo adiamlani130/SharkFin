@@ -60,11 +60,11 @@ def setup():
 def fmt_money(x, digits: int = 2) -> str:
     if x is None or not np.isfinite(x):
         return "—"
-    a = abs(x)
+    a, neg = abs(x), "-" if x < 0 else ""
     for div, suf in ((1e12, "T"), (1e9, "B"), (1e6, "M")):
         if a >= div:
-            return f"${x / div:,.{digits}f}{suf}"
-    return f"${x:,.{digits}f}"
+            return f"{neg}${a / div:,.{digits}f}{suf}"
+    return f"{neg}${a:,.{digits}f}"
 
 
 def fmt_pct(x, digits: int = 1, sign: bool = False) -> str:

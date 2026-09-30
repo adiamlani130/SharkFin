@@ -109,20 +109,32 @@ def download_prices(symbols: tuple, period: str = "2y", field: str = "Close", ch
     instead of one per ticker."""
     frames = []
     syms = list(dict.fromkeys(symbols))
-    for i in range(0, len(syms), chunk):
-        part = syms[i:i + chunk]
+
+    def fetch(part: list, threads: bool) -> pd.DataFrame:
         try:
-            raw = _yf().download(part, period=period, auto_adjust=True, progress=False, threads=True, group_by="column")
+            raw = _yf().download(part, period=period, auto_adjust=True, progress=False, threads=threads, group_by="column")
         except Exception as e:  # pragma: no cover - network
             log.warning("download chunk failed: %s", e)
-            continue
+            return pd.DataFrame()
         if raw is None or raw.empty:
-            continue
+            return pd.DataFrame()
         if isinstance(raw.columns, pd.MultiIndex):
-            sub = raw[field] if field in raw.columns.get_level_values(0) else pd.DataFrame()
-        else:
-            sub = raw[[field]].rename(columns={field: part[0]})
-        frames.append(sub)
+            return raw[field] if field in raw.columns.get_level_values(0) else pd.DataFrame()
+        return raw[[field]].rename(columns={field: part[0]})
+
+    for i in range(0, len(syms), chunk):
+        part = syms[i:i + chunk]
+        sub = fetch(part, threads=True)
+        # yfinance's threaded download sometimes drops tickers on transient
+        # errors (e.g. its SQLite timezone cache reports "database is locked");
+        # retry those once, single-threaded.
+        missing = [s for s in part if s not in sub.columns or sub[s].isna().all()]
+        if missing:
+            retry = fetch(missing, threads=False)
+            if not retry.empty:
+                sub = pd.concat([sub.drop(columns=[c for c in retry.columns if c in sub.columns]), retry], axis=1)
+        if not sub.empty:
+            frames.append(sub)
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, axis=1)

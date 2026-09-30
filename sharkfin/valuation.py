@@ -249,10 +249,26 @@ def normalized_fcf(fin: Financials, ttm_fcf: float = np.nan, subtract_sbc: bool 
     return base
 
 
-def default_growth(fin: Financials, analyst_growth: float = np.nan) -> float:
-    """Blend of analyst growth and historical revenue CAGR, clipped to sane range."""
-    parts = [x for x in (analyst_growth, fin.revenue_cagr(3)) if np.isfinite(x)]
-    g = float(np.mean(parts)) if parts else 0.05
+def forward_growth(growth_estimates) -> float:
+    """Consensus next-fiscal-year growth (``+1y`` row of Yahoo's growth
+    estimates), falling back to long-term growth; NaN when unavailable."""
+    if not isinstance(growth_estimates, pd.DataFrame) or growth_estimates.empty:
+        return np.nan
+    col = "stockTrend" if "stockTrend" in growth_estimates.columns else growth_estimates.columns[0]
+    for row in ("+1y", "LTG"):
+        if row in growth_estimates.index:
+            v = pd.to_numeric(pd.Series([growth_estimates.at[row, col]]), errors="coerce").iloc[0]
+            if np.isfinite(v):
+                return float(v)
+    return np.nan
+
+
+def default_growth(fin: Financials, *estimates: float) -> float:
+    """Median of the given growth estimates and the 3-year revenue CAGR,
+    clipped to a sane range. The median keeps one extreme input (a cyclical's
+    commodity-driven revenue jump, a one-off bad year) from setting the DCF."""
+    parts = [x for x in (*estimates, fin.revenue_cagr(3)) if x is not None and np.isfinite(x)]
+    g = float(np.median(parts)) if parts else 0.05
     return float(np.clip(g, -0.05, 0.30))
 
 

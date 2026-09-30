@@ -154,7 +154,11 @@ with tabs[1]:
     ttm_fcf = data.ttm(qfin.fcf())
     analyst_g = ui.num(inf.get("earningsGrowth"))
     rev_g = ui.num(inf.get("revenueGrowth"))
-    g_default = valuation.default_growth(fin, np.nanmean([analyst_g, rev_g]) if np.isfinite([analyst_g, rev_g]).any() else np.nan)
+    # Yahoo's earningsGrowth is last quarter's YoY change, which swings wildly
+    # for cyclicals (XOM +113%), so it is no basis for five years of FCF growth.
+    # Use consensus next-year growth and revenue growth instead.
+    fwd_g = valuation.forward_growth(data.analyst_data(sym).get("growth_estimates"))
+    g_default = valuation.default_growth(fin, fwd_g, rev_g)
 
     if is_financial:
         st.warning("Free-cash-flow DCFs are not meaningful for banks and insurers (debt is raw material, not financing). "
@@ -163,7 +167,7 @@ with tabs[1]:
     with st.expander("⚙️ DCF assumptions", expanded=False):
         a1, a2, a3, a4 = st.columns(4)
         growth = a1.slider("Stage-1 FCF growth", -0.10, 0.40, float(round(g_default, 3)), 0.005, format="%.3f",
-                           help="Default blends analyst growth and 3-year revenue CAGR.")
+                           help="Default is the median of consensus next-year growth, latest revenue growth and 3-year revenue CAGR.")
         hg_years = a1.slider("High-growth years", 3, 10, 5)
         tg = a2.slider("Terminal growth", 0.0, 0.04, float(min(0.025, rf)), 0.0025,
                        help="Capped near the risk-free rate: no company outgrows the economy forever.")
@@ -302,6 +306,7 @@ with tabs[2]:
     f_score = valuation.piotroski_f_score(fin)
     z = valuation.altman_z(fin, mcap)
     qm = valuation.quality_metrics(fin, mcap)
+    z = None if is_financial else z
     quality = {"piotroski": f_score.score if f_score else None, "altman_z": z.score if z else None,
                "altman_zone": z.label if z else None, **qm}
     c1, c2 = st.columns(2)
@@ -313,7 +318,10 @@ with tabs[2]:
         else:
             st.info("Not enough statement history for a Piotroski score.")
     with c2:
-        if z:
+        if is_financial:
+            st.info("Altman Z-score is skipped for banks and insurers: their balance sheets are mostly debt by design, "
+                    "so the model flags nearly all of them as distressed.")
+        elif z:
             st.metric("Altman Z-score", f"{z.score:.2f} · {z.label}",
                       help=">2.99 safe, 1.81–2.99 grey, <1.81 distress (original public-company model; less reliable for financials).")
             st.dataframe(pd.DataFrame(z.components, columns=["Component", "Value", "Weight"]), hide_index=True, width="stretch")

@@ -147,6 +147,20 @@ def test_piotroski_and_altman():
     assert fin.revenue_cagr(2) == pytest.approx((1200 / 900) ** 0.5 - 1)
 
 
+def test_forward_growth_prefers_next_year_consensus():
+    ge = pd.DataFrame({"stockTrend": [0.97, -0.08, np.nan], "indexTrend": [0.5, 0.34, 0.12]}, index=["0q", "+1y", "LTG"])
+    assert valuation.forward_growth(ge) == pytest.approx(-0.08)
+    ge.loc["+1y", "stockTrend"] = np.nan
+    assert np.isnan(valuation.forward_growth(ge))
+    assert np.isnan(valuation.forward_growth(None))
+
+
+def test_fmt_money_negative_sign_before_dollar():
+    from sharkfin import ui
+    assert ui.fmt_money(-104.5) == "-$104.50"
+    assert ui.fmt_money(-2.5e9) == "-$2.50B"
+
+
 def test_implied_prices_from_peers():
     peers = pd.DataFrame({"EV/EBITDA": [8, 10, 12, 14, 200], "P/E (ttm)": [15, 18, 20, 22, 25]})
     target = {"price": 50, "shares": 10, "net_debt": 100, "ebitda": 50, "trailing_eps": 2.5}
