@@ -112,7 +112,7 @@ st.dataframe(lb, hide_index=True, width="stretch", column_config={
     "Weight": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f%%", help=tip("weight")),
     f"Forecast ({H}d)": st.column_config.NumberColumn(format="%+.1f%%", help="This model's own forecast return over the horizon."),
     "Skill vs random walk": st.column_config.NumberColumn(format="%+.1f%%", help=tip("skill")),
-    "Direction hit rate": st.column_config.NumberColumn("Right direction", format="%.0f%%", help=tip("hit_rate")),
+    "Direction hit rate": st.column_config.NumberColumn("Backtested Accuracy", format="%.0f%%", help=tip("hit_rate")),
     "How it works": st.column_config.TextColumn(help="A one-line description of the model."),
 })
 cov_txt = ui.fmt_pct(res.coverage_80, 0)
