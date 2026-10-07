@@ -347,7 +347,14 @@ def test_filing_change_finds_new_risk_language():
 
 def test_core_long_screen_filters_value_traps():
     from sharkfin import catalysts
-    df = pd.DataFrame({"Quality": [1.0, 1.2, -0.5, 0.8], "Value": [0.5, 0.2, 1.0, -1.0], "Momentum": [0.3, -0.2, 0.5, 0.1],
-                       "mom_12_1": [0.2, -0.1, 0.3, 0.1], "trend_200": [0.05, -0.02, 0.1, 0.02]}, index=list("ABCD"))
-    out = catalysts.core_long_screen(df)
-    assert list(out.index) == ["A"]  # B has negative momentum, C low quality, D expensive
+    idx = list("ABCDE")
+    df = pd.DataFrame({"Value": [0.5, 0.2, 1.0, -1.5, 0.3], "mom_12_1": [0.2, -0.1, 0.3, 0.1, 0.4],
+                       "trend_200": [0.05, -0.02, 0.1, 0.02, 0.1], "fip": [0.1, 0.1, 0.1, 0.1, 0.12],
+                       "volatility": [0.2, 0.2, 0.25, 0.2, 0.9], "Sector": ["Technology"] * 5}, index=idx)
+    inf = pd.DataFrame({"netIncomeToCommon": [1e9, 1e9, -1e8, 1e9, 1e9], "freeCashflow": [1e9] * 5,
+                        "totalDebt": [1e9] * 5, "totalCash": [5e8] * 5, "ebitda": [2e9] * 5}, index=idx)
+    out, funnel = catalysts.core_long_screen(df, inf)
+    # B downtrend, C loses money, D expensive, E too volatile
+    assert list(out.index) == ["A"]
+    assert funnel[0]["Still in"] == 5 and funnel[-1]["Still in"] == 1
+    assert [f["Still in"] for f in funnel] == sorted([f["Still in"] for f in funnel], reverse=True)

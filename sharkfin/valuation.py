@@ -464,3 +464,44 @@ def fair_value_summary(price: float, estimates: dict) -> dict:
     else:
         label = "Significantly overvalued"
     return {"fair_value": fv, "upside": up, "label": label}
+
+
+def starting_fcf(fin: Financials, quarterly: Financials | None = None, info: dict | None = None,
+                 subtract_sbc: bool = False) -> tuple[float, str]:
+    """Best available starting free cash flow and where it came from.
+
+    Prefers the normalised statement figure (TTM blended with the 3-year
+    average); falls back to Yahoo's TTM free cash flow, then operating cash
+    flow minus capex, so a missing statement doesn't silently kill the DCF.
+    """
+    info = info or {}
+    ttm_fcf = np.nan
+    if quarterly is not None:
+        q = quarterly.fcf().dropna()
+        ttm_fcf = float(q.iloc[:4].sum()) if len(q) >= 4 else np.nan
+    base = normalized_fcf(fin, ttm_fcf, subtract_sbc=False)
+    source = "statements (TTM + 3-year average)"
+    if not np.isfinite(base):
+        v = pd.to_numeric(pd.Series([info.get("freeCashflow")]), errors="coerce").iloc[0]
+        if np.isfinite(v):
+            base, source = float(v), "Yahoo TTM free cash flow"
+    if not np.isfinite(base):
+        ocf = pd.to_numeric(pd.Series([info.get("operatingCashflow")]), errors="coerce").iloc[0]
+        capex = _v(fin.capex(), 0, 0.0)
+        if np.isfinite(ocf):
+            base, source = float(ocf - (capex if np.isfinite(capex) else 0.0)), "operating cash flow − capex"
+    if np.isfinite(base) and subtract_sbc:
+        sbc = _v(fin.sbc(), 0, 0.0)
+        base -= sbc if np.isfinite(sbc) else 0.0
+    return base, source
+
+
+def justified_pb_value(roe: float, cost_of_equity: float, growth: float, book_per_share: float) -> float:
+    """Residual-income value for banks and insurers: a firm earning ROE on
+    book equity forever, growing at g, is worth (ROE − g) / (Ke − g) × book."""
+    if not all(np.isfinite(x) for x in (roe, cost_of_equity, growth, book_per_share)):
+        return np.nan
+    if book_per_share <= 0 or cost_of_equity <= growth + 0.005 or roe <= growth:
+        return np.nan
+    roe = float(np.clip(roe, 0.0, 0.35))
+    return float((roe - growth) / (cost_of_equity - growth) * book_per_share)

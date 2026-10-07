@@ -294,19 +294,85 @@ def core_long_checklist(inf: dict, fin: valuation.Financials, hist: pd.DataFrame
     return {"rows": rows, "passed": passed, "total": len(scored), "verdict": verdict, "tone": tone}
 
 
-def core_long_screen(scores: pd.DataFrame, top: int = 25) -> pd.DataFrame:
-    """Rank a scanner result for passive 'core long' candidates: quality and
-    value first, momentum and trend as a value-trap filter."""
-    need = {"Quality", "Value", "Momentum"}
-    if not need.issubset(scores.columns):
-        return pd.DataFrame()
+CORE_LONG_INTRO = (
+    "Stocks to buy and hold for months to years. Every stock has to pass six simple rules (profitable, in an uptrend, "
+    "rising steadily rather than in jumps, not too volatile, not over-borrowed, not expensive for its sector), then "
+    "the survivors are ranked by momentum, smoothness and value. Tested on S&amp;P 500 stocks from 2023 to 2025, the "
+    "top 25 had a median 12-month return of 21% versus 14% for the index members, 83% of them were up a year later, "
+    "and only 4% lost more than a fifth (vs 9%). That tilts the odds; it does not guarantee anything.")
+CORE_SCORE_HELP = ("Momentum + smoothness of the climb + value, each in standard deviations versus the list. "
+                   "Higher is better; only stocks that pass every rule get a score.")
+
+_NO_FCF_SECTORS = {"Financial Services", "Real Estate"}
+
+
+def _col(df: pd.DataFrame, c: str) -> pd.Series:
+    return pd.to_numeric(df[c], errors="coerce") if c in df else pd.Series(np.nan, index=df.index)
+
+
+def _z(s: pd.Series) -> pd.Series:
+    sd = s.std()
+    return (s - s.mean()) / sd if sd and sd > 0 else s * 0
+
+
+def core_long_screen(scores: pd.DataFrame, info_df: pd.DataFrame | None = None,
+                     top: int = 25) -> tuple[pd.DataFrame, list[dict]]:
+    """Long-horizon screen: six pass/fail gates, then rank by momentum + FIP + value.
+
+    Returns the ranked survivors and a funnel showing how many stocks are left
+    after each rule. Missing data fails a rule only where the rule needs it
+    (no profit data means we can't call it profitable)."""
     df = scores.copy()
-    ok = (df["Quality"] > 0) & (df["Value"] > -0.5)
-    if "mom_12_1" in df:
-        ok &= df["mom_12_1"] > 0
-    if "trend_200" in df:
-        ok &= df["trend_200"] > 0
-    df = df[ok]
-    analysts = df["Analysts"].fillna(0) if "Analysts" in df else 0
-    df["Core score"] = 0.4 * df["Quality"] + 0.3 * df["Value"] + 0.2 * df["Momentum"] + 0.1 * analysts
-    return df.sort_values("Core score", ascending=False).head(top)
+    inf = (info_df if info_df is not None else pd.DataFrame()).reindex(df.index)
+    sector = df["Sector"] if "Sector" in df else inf.get("sector", pd.Series(np.nan, index=df.index))
+    fin_like = sector.isin(_NO_FCF_SECTORS)
+
+    ni = _col(inf, "netIncomeToCommon")
+    eps = _col(inf, "trailingEps")
+    profit_known = ni.notna() | eps.notna()
+    profitable = ni.where(ni.notna(), eps) > 0
+    fcf = _col(inf, "freeCashflow")
+    cash_ok = fin_like | (fcf > 0) | (fcf.isna() & _col(inf, "operatingCashflow").gt(0))
+    mom = _col(df, "mom_12_1")
+    trend = _col(df, "trend_200")
+    fip = _col(df, "fip")
+    vol = _col(df, "volatility")
+    debt, cash, ebitda = _col(inf, "totalDebt"), _col(inf, "totalCash"), _col(inf, "ebitda")
+    nd_ebitda = (debt.fillna(0) - cash.fillna(0)) / ebitda.where(ebitda > 0)
+    de = _col(inf, "debtToEquity") / 100
+    lev_ok = fin_like | (nd_ebitda < 3) | (nd_ebitda.isna() & (de.isna() | (de < 1.5)))
+    value = _col(df, "Value")
+
+    rules = [
+        ("Profitable", profit_known & profitable & cash_ok,
+         "Positive earnings and free cash flow (cash flow waived for banks and REITs). Money-losing companies "
+         "are where most long-term blow-ups come from."),
+        ("In an uptrend", (trend > 0) & (mom > 0),
+         "Above its 200-day average and up over the last 12 months (skipping the latest month). Avoids catching falling knives."),
+        ("Steady climb", fip >= fip.median(),
+         "More up days than down days over the past year, top half of the list. Gains that come gradually tend to "
+         "persist; gains from one or two jumps tend to fade."),
+        ("Not too volatile", vol.rank(pct=True) < 0.7,
+         "Outside the 30% most volatile stocks. Wild stocks cause most of the large losses."),
+        ("Debt under control", lev_ok,
+         "Net debt under 3x EBITDA (or debt under 1.5x equity). Waived for banks, whose balance sheets work differently."),
+        ("Not expensive", value.isna() | (value > -1),
+         "Not in the priciest sixth of its sector on earnings, cash flow and EBITDA."),
+    ]
+    funnel = [{"Rule": "All stocks scanned", "Still in": len(df), "Why": "Starting universe."}]
+    keep = pd.Series(True, index=df.index)
+    for name, mask, why in rules:
+        keep &= mask.fillna(False).astype(bool)
+        funnel.append({"Rule": name, "Still in": int(keep.sum()), "Why": why})
+    out = df[keep].copy()
+    if out.empty:
+        return out, funnel
+    # Rank survivors on the full-list z-scores so the score means the same thing every scan.
+    zfip = _z(fip)
+    zmom = _z(mom.clip(mom.quantile(0.02), mom.quantile(0.98)))
+    out["Core score"] = (zmom + zfip + value.fillna(0)).reindex(out.index)
+    out["fip"] = fip.reindex(out.index)
+    for c, src in (("roe", "returnOnEquity"),):
+        if c not in out:
+            out[c] = _col(inf, src).reindex(out.index)
+    return out.sort_values("Core score", ascending=False).head(top), funnel

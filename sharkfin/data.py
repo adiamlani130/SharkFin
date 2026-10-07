@@ -179,11 +179,18 @@ def download_ohlcv(symbols: tuple, period: str = "2y", chunk: int = 150) -> dict
 
 @ttl_cache(3600)
 def info(symbol: str) -> dict:
-    try:
-        d = _yf().Ticker(symbol).info or {}
-    except Exception as e:  # pragma: no cover - network
-        log.warning("info(%s) failed: %s", symbol, e)
-        d = {}
+    d = {}
+    # Yahoo rate-limits shared hosts (e.g. Streamlit Cloud) in bursts; one
+    # short back-off usually gets the data instead of a page full of dashes.
+    for attempt in range(3):
+        try:
+            d = _yf().Ticker(symbol).info or {}
+        except Exception as e:  # pragma: no cover - network
+            log.warning("info(%s) failed: %s", symbol, e)
+            d = {}
+        if len(d) > 5:
+            break
+        time.sleep(0.8 * (attempt + 1))
     if not d.get("currentPrice") and not d.get("regularMarketPrice"):
         try:
             fi = _yf().Ticker(symbol).fast_info
@@ -242,7 +249,7 @@ def analyst_data(symbol: str) -> dict:
 
 
 @ttl_cache(12 * 3600)
-def infos(symbols: tuple, workers: int = 8) -> pd.DataFrame:
+def infos(symbols: tuple, workers: int = 6) -> pd.DataFrame:
     """``info`` for many symbols in parallel (used for peers and the scanner)."""
     with ThreadPoolExecutor(max_workers=workers) as ex:
         rows = list(ex.map(info, symbols))
@@ -382,6 +389,20 @@ def search(query: str) -> list:
     return out
 
 
+@ttl_cache(24 * 3600)
+def industry_members(industry_key: str) -> list:
+    """Largest US-listed companies in a Yahoo industry (works for any stock, not just the S&P 500)."""
+    try:
+        top = _yf().Industry(industry_key).top_companies
+    except Exception as e:  # pragma: no cover - network
+        log.warning("industry(%s) failed: %s", industry_key, e)
+        return []
+    if top is None or top.empty:
+        return []
+    syms = [str(s) for s in top.index if isinstance(s, str) and s.replace("-", "").isalpha()]
+    return syms[:25]
+
+
 def peers_for(symbol: str, inf: dict, max_peers: int = 15) -> list:
     """Same GICS sub-industry (else sector) peers from the S&P 500 table,
     falling back to yfinance sector/industry matching of the large-cap list."""
@@ -393,8 +414,10 @@ def peers_for(symbol: str, inf: dict, max_peers: int = 15) -> list:
         if len(peers) < 5:
             peers += tab[(tab["Sector"] == row["Sector"].iloc[0]) & (tab["Symbol"] != symbol)]["Symbol"].tolist()
     peers = list(dict.fromkeys(peers))
+    if len(peers) < 5 and inf.get("industryKey"):
+        peers += [s for s in industry_members(inf["industryKey"]) if s != symbol and s not in peers]
     if len(peers) < 5 and inf.get("industry"):
-        cand = [s for s in FALLBACK_SP500 if s != symbol][:120]
+        cand = [s for s in FALLBACK_SP500 if s != symbol][:60]
         df = infos(tuple(cand))
         same = df[df.get("industry") == inf.get("industry")] if "industry" in df else pd.DataFrame()
         if len(same) < 5 and "sector" in df:
@@ -520,7 +543,37 @@ def sec_cik(symbol: str) -> int | None:
 
 @ttl_cache(6 * 3600)
 def sec_filings(symbol: str, forms: tuple = ("10-K", "10-Q", "8-K"), limit: int = 40) -> pd.DataFrame:
-    """Recent filings with links, newest first. Empty frame if EDGAR is unreachable."""
+    """Recent filings with links, newest first: straight from SEC EDGAR, or from
+    Yahoo's copy of the same filings when EDGAR is unreachable. Empty frame if
+    neither answers (or the company isn't a US filer)."""
+    df = _edgar_filings(symbol, forms, limit)
+    if df.empty:
+        df = _yahoo_filings(symbol, forms, limit)
+    return df
+
+
+def _yahoo_filings(symbol: str, forms: tuple, limit: int) -> pd.DataFrame:
+    try:
+        raw = _yf().Ticker(symbol).sec_filings or []
+    except Exception as e:  # pragma: no cover - network
+        log.warning("Yahoo filings(%s) failed: %s", symbol, e)
+        return pd.DataFrame()
+    rows = []
+    for f in raw:
+        form = str(f.get("type", "")).replace("/A", "")
+        if form not in forms:
+            continue
+        ex = f.get("exhibits") or {}
+        doc = ex.get(f.get("type")) or ex.get(form) or next(iter(ex.values()), None)
+        rows.append({"form": form, "filed": pd.to_datetime(f.get("date"), errors="coerce"), "reportDate": None,
+                     "what": f.get("title") if form == "8-K" else "", "url": doc or f.get("edgarUrl"),
+                     "source": "Yahoo Finance"})
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("filed", ascending=False).head(limit).reset_index(drop=True)
+
+
+def _edgar_filings(symbol: str, forms: tuple, limit: int) -> pd.DataFrame:
     cik = sec_cik(symbol)
     if not cik:
         return pd.DataFrame()
@@ -539,7 +592,8 @@ def sec_filings(symbol: str, forms: tuple = ("10-K", "10-Q", "8-K"), limit: int 
     items = rec.get("items", pd.Series("", index=rec.index)).fillna("")
     rec["what"] = [", ".join(SEC_FORM_ITEMS.get(i.strip(), i.strip()) for i in str(s).split(",") if i.strip() and i.strip() != "9.01")
                    for s in items]
-    return rec[["form", "filed", "reportDate", "what", "url"]].reset_index(drop=True)
+    rec["source"] = "SEC EDGAR"
+    return rec[["form", "filed", "reportDate", "what", "url", "source"]].reset_index(drop=True)
 
 
 @ttl_cache(24 * 3600)
@@ -547,7 +601,13 @@ def sec_document_text(url: str) -> str:
     from .catalysts import html_to_text
 
     try:
-        return html_to_text(_sec_get(url, timeout=40).text)
+        if "sec.gov" in url:
+            return html_to_text(_sec_get(url, timeout=40).text)
+        import requests
+
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 SharkFin"}, timeout=40)
+        r.raise_for_status()
+        return html_to_text(r.text)
     except Exception as e:  # pragma: no cover - network
         log.warning("SEC document %s failed: %s", url, e)
         return ""

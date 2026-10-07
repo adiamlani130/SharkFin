@@ -151,9 +151,22 @@ def hours_old(published: datetime | None, now: datetime | None = None) -> float:
     return max(0.0, (now - published).total_seconds() / 3600)
 
 
+# Auto-generated "fund X bought/sold N shares" stories (13F filings rewritten
+# by content farms) crowd out real news and carry no information.
+_NOISE = re.compile(
+    r"(shares|stake|stock|position|holdings?)\s+(sold|purchased|acquired|bought|trimmed|raised|lowered|boosted|cut|"
+    r"increased|reduced|decreased|grown|lifted)\s+by\b|\b(trims|lifts|raises|lowers|boosts|cuts|increases|reduces|"
+    r"decreases|grows)\s+(stock\s+)?(holdings|position|stake)\b|\bnew (stake|position) in\b|"
+    r"^\d[\d,]*\s+shares\s+in\b", re.I)
+
+
+def is_noise(title: str) -> bool:
+    return bool(_NOISE.search(title or ""))
+
+
 def rank_articles(articles: list[dict], query: str | None = None, half_life_h: float = 36.0) -> list[dict]:
     """Attach sentiment + relevance and sort by relevance x recency."""
-    articles = dedupe(articles)
+    articles = dedupe([a for a in articles if not is_noise(a.get("title", ""))])
     texts = [f"{a.get('title', '')} {a.get('title', '')} {clean_text(a.get('summary', ''))}" for a in articles]
     rel = BM25(texts).scores(query) if query and articles else [1.0] * len(articles)
     mx = max(rel) if rel and max(rel) > 0 else 1.0
