@@ -21,7 +21,7 @@ pages = {
     "Markets": [
         st.Page("app_pages/home.py", title="Market Dashboard", default=True),
         st.Page("app_pages/scanner.py", title="Top Performers"),
-        st.Page("app_pages/news.py", title="News Desk"),
+        st.Page("app_pages/news.py", title="News"),
     ],
     "Stock Analysis": [
         st.Page("app_pages/research.py", title="Research & Valuation"),

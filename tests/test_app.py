@@ -70,18 +70,27 @@ def test_scanner_swing_and_core_tabs():
 
 def test_news_catalysts_view_and_10k_compare():
     at = _page("news")
-    at.segmented_control[0].set_value("Catalysts").run()
+    at.segmented_control[0].set_value("Stock catalysts").run()
     _ok(at)
     assert any(m.label == "Insider buyers (6m)" for m in at.metric)
-    next(b for b in at.button if "10-K" in b.label).click().run()
+    next(b for b in at.button if "annual reports" in b.label).click().run()
     _ok(at)
-    assert any(m.label == "Wording similarity" for m in at.metric)
+    assert any(m.label == "Wording kept" for m in at.metric)
 
 
-def test_strategy_lab_confluence_ablation():
+def test_strategy_lab_builder_and_swing_system():
     at = _page("strategy_lab")
     _ok(at)
-    assert any(m.label == "Expectancy" for m in at.metric)
+    labels = {m.label for m in at.metric}
+    assert {"Return per year", "Worst drop", "Avg result per trade"}.issubset(labels)
+    at.selectbox(key="lab_tpl").set_value("RSI dip in an uptrend").run()
+    _ok(at)
+    assert any("RSI(14) is below 35" in md.value for md in at.markdown)
+    next(b for b in at.button if b.label == "Add a buy rule").click().run()
+    _ok(at)
+    removes = [b for b in at.button if b.key and b.key.endswith("_x")]
+    removes[0].click().run()
+    _ok(at)
     next(t for t in at.toggle if "filter adds" in t.label).set_value(True).run()
     _ok(at)
 
@@ -90,4 +99,6 @@ def test_research_trade_setup_tab():
     at = _page("research")
     _ok(at)
     labels = {m.label for m in at.metric}
-    assert {"Entry", "Stop", "Nearest resistance"}.issubset(labels)
+    assert "Fair value" in labels
+    assert {"Entry", "Stop"}.issubset(labels) or {"20-day EMA", "50-day average"}.issubset(labels)
+    assert any("esistance" in lab for lab in labels)

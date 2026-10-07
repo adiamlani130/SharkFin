@@ -73,6 +73,11 @@ div[class*="st-key-sfc6-"] {grid-template-columns: repeat(6, minmax(0, 1fr));}
 @container (max-width: 1000px) {div[class*="st-key-sfc6-"] {grid-template-columns: repeat(3, minmax(0, 1fr));}}
 @container (max-width: 760px) {
   div[class*="st-key-sfc4-"], div[class*="st-key-sfc5-"] {grid-template-columns: repeat(2, minmax(0, 1fr));}}
+/* ---------- Strategy Lab rule rows: wrap two-per-line on phones instead of stacking ---------- */
+div[class*="st-key-sfrule"] [data-testid="stHorizontalBlock"] {flex-wrap: wrap; row-gap: .5rem;}
+@media (max-width: 640px) {
+  div[class*="st-key-sfrule"] [data-testid="stColumn"] {flex: 1 1 calc(50% - 1rem) !important; min-width: calc(50% - 1rem) !important; width: auto !important;}
+}
 @container (max-width: 520px) {
   div[class*="st-key-sfc3-"], div[class*="st-key-sfc6-"] {grid-template-columns: repeat(2, minmax(0, 1fr));}}
 
