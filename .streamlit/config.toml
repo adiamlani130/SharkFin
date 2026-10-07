@@ -1,10 +1,29 @@
 [theme]
 base = "dark"
-primaryColor = "#00d68f"
-backgroundColor = "#0b0f14"
-secondaryBackgroundColor = "#121821"
-textColor = "#e5e7eb"
-font = "sans serif"
+primaryColor = "#2dd4a3"
+backgroundColor = "#0a0e14"
+secondaryBackgroundColor = "#121822"
+textColor = "#e6e9ef"
+borderColor = "#1f2836"
+dataframeBorderColor = "#1f2836"
+dataframeHeaderBackgroundColor = "#111722"
+linkColor = "#7cc4ff"
+linkUnderline = false
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+headingFontSizes = ["2rem", "1.35rem", "1.12rem", "1rem", "0.95rem", "0.9rem"]
+baseFontSize = 15
+baseRadius = "0.6rem"
+metricValueFontSize = "1.45rem"
+metricValueFontWeight = 600
+showWidgetBorder = true
+chartCategoricalColors = ["#4ea8ff", "#2dd4a3", "#f5a524", "#a78bfa", "#ff5c7a", "#f472b6", "#5eead4", "#facc15"]
+
+[theme.sidebar]
+backgroundColor = "#0d121a"
+secondaryBackgroundColor = "#151c27"
+borderColor = "#1a2230"
 
 [client]
 toolbarMode = "minimal"

@@ -85,6 +85,10 @@ def price_factor_frame(prices: pd.DataFrame, asof: int | None = None) -> pd.Data
     f["ma_align"] = np.sign(sma50 - sma200)
     vol = rets.iloc[-63:].std() * np.sqrt(252)
     f["volatility"] = vol
+    # Frog-in-the-pan (Da, Gurun & Warachka): smooth, steady gains persist better than a few big jumps.
+    w = rets.iloc[-252:-21] if n > 273 else rets.iloc[:-21]
+    if len(w) > 60:
+        f["fip"] = (w > 0).mean() - (w < 0).mean()
     f["low_vol"] = -vol
     f["rev_1w"] = -(p.iloc[-1] / p.iloc[-6] - 1)
     f["ret_1m"] = p.iloc[-1] / p.iloc[-22] - 1
@@ -159,12 +163,31 @@ def composite_scores(price_f: pd.DataFrame, fund_f: pd.DataFrame | None = None,
     return out.join(raw, how="left")
 
 
+THEME_WORDS = {
+    "Momentum": ("Strong momentum", "Weak momentum"), "Trend": ("Uptrend", "Downtrend"),
+    "Low Risk": ("Low volatility", "High volatility"), "Reversal": ("Recent dip", "Short-term stretched"),
+    "Value": ("Cheap vs sector", "Pricey vs sector"), "Quality": ("High quality", "Low quality"),
+    "Growth": ("Fast growth", "Slow growth"), "Analysts": ("Analysts bullish", "Analysts cautious"),
+}
+THEME_HELP = {
+    "Momentum": "12-month return excluding the last month, risk-adjusted momentum and closeness to the 52-week high. "
+                "Winners have tended to keep winning for 3-12 months.",
+    "Trend": "Price vs its 200-day average and whether the 50-day is above the 200-day.",
+    "Low Risk": "Low volatility and low beta. Calmer stocks have historically earned about as much as wild ones with less pain.",
+    "Reversal": "Last week's losers tend to bounce slightly the next week. Small weight on purpose.",
+    "Value": "Forward earnings yield, free-cash-flow yield and EBITDA/EV, compared with the stock's own sector.",
+    "Quality": "Return on equity, gross and net margins and low debt, compared with the stock's own sector.",
+    "Growth": "Revenue and earnings growth.",
+    "Analysts": "Upside to the average price target and the consensus rating.",
+}
+
+
 def explain(row: pd.Series, top: int = 3) -> tuple[list[str], list[str]]:
-    """Strongest positive and negative theme drivers for a stock."""
+    """Strongest positive and negative theme drivers for a stock, in plain words."""
     themes = [t for t in DEFAULT_THEME_WEIGHTS if t in row.index and pd.notna(row[t])]
     s = row[themes].astype(float).sort_values()
-    pos = [f"{t} ({v:+.1f}σ)" for t, v in s[::-1].items() if v > 0.3][:top]
-    neg = [f"{t} ({v:+.1f}σ)" for t, v in s.items() if v < -0.3][:top]
+    pos = [THEME_WORDS[t][0] for t, v in s[::-1].items() if v > 0.3][:top]
+    neg = [THEME_WORDS[t][1] for t, v in s.items() if v < -0.3][:top]
     return pos, neg
 
 

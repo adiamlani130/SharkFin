@@ -1,4 +1,4 @@
-"""News desk: categorised market news ranked by relevance and recency, with sentiment."""
+"""News: market headlines by topic with a tone read, and a per-stock catalyst desk."""
 
 import numpy as np
 import pandas as pd
@@ -6,11 +6,9 @@ import streamlit as st
 
 from sharkfin import catalysts, data, sentiment, ui
 
-st.title("News Desk")
-mode = st.segmented_control("View", ["Headlines", "Catalysts"], default="Headlines",
-                            help="Headlines: market news by topic. Catalysts: for one stock, the events that tend to move "
-                                 "prices before they're fully priced in (earnings surprises, insider buying, buybacks, "
-                                 "estimate revisions, SEC filings).")
+ui.header("News", "Market headlines by topic, and the events that tend to move a single stock before they're priced in.")
+
+mode = st.segmented_control("View", ["Headlines", "Stock catalysts"], default="Headlines", label_visibility="collapsed")
 
 CATEGORIES = {
     "Markets": "stock market economy Fed rates inflation",
@@ -22,7 +20,78 @@ CATEGORIES = {
     "Consumer": "consumer retail food beverage stocks",
     "Crypto": "bitcoin crypto ETF",
 }
+FORM_NAMES = {"10-K": "Annual report", "10-Q": "Quarterly report", "8-K": "Event"}
 
+
+def _tone_line(arts: list):
+    agg = sentiment.aggregate_sentiment(arts[:40])
+    if not agg["n"]:
+        return
+    st.markdown(f"<div class='sf-muted' style='margin:.2rem 0 .6rem'>Overall tone "
+                f"{ui.pill(agg['label'], ui.tone(agg['score'], 0.1))} across {agg['n']} stories: "
+                f"{agg['positive']} positive, {agg['negative']} negative.</div>", unsafe_allow_html=True)
+
+
+def render(q: str):
+    with st.spinner("Loading headlines…"):
+        arts = sentiment.rank_articles(data.news(q), q)
+    if not arts:
+        st.info("No recent stories found for this topic.")
+        return
+    _tone_line(arts)
+    for a in arts[:30]:
+        ui.news_item(a)
+
+
+def _filings(sym: str):
+    st.subheader("SEC filings", help="10-K = annual report, 10-Q = quarterly report, 8-K = a material event "
+                                      "(results, a deal, an executive change, a restructuring).")
+    filings = data.sec_filings(sym)
+    edgar = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={sym}&type=&dateb=&owner=include&count=40"
+    if filings.empty:
+        st.info(f"No filings came back for {sym}. Non-US companies file elsewhere; for US companies SEC EDGAR "
+                f"is sometimes briefly unavailable. You can [search EDGAR directly]({edgar}).")
+        return
+    src = filings["source"].iloc[0] if "source" in filings else "SEC EDGAR"
+    f = filings.copy()
+    f["Type"] = f["form"].map(FORM_NAMES).fillna(f["form"])
+    f["Details"] = [(w if isinstance(w, str) and w.strip() else FORM_NAMES.get(fm, fm)) for w, fm in zip(f["what"], f["form"])]
+    st.dataframe(f[["filed", "form", "Type", "Details", "url"]], hide_index=True, width="stretch", height=320, column_config={
+        "filed": st.column_config.DateColumn("Filed", format="MMM D, YYYY", width="small"),
+        "form": st.column_config.TextColumn("Form", width="small"),
+        "Type": st.column_config.TextColumn(width="small"),
+        "Details": st.column_config.TextColumn(width="large"),
+        "url": st.column_config.LinkColumn("Document", display_text="Open", width="small")})
+    st.caption(f"Source: {src}" + ("" if src == "SEC EDGAR" else f" (SEC EDGAR didn't answer, so this is Yahoo's copy of the same "
+                                                                  f"filings). [Open on EDGAR]({edgar})"))
+
+    tenk = f[f["form"] == "10-K"].head(2)
+    st.subheader("What changed in the annual report",
+                 help="Compares the Risk Factors section of the last two 10-Ks. Companies whose annual-report wording "
+                      "changes a lot have tended to underperform afterwards ('Lazy Prices', Cohen, Malloy & Nguyen 2020).")
+    if len(tenk) < 2:
+        st.caption("Needs two annual reports (10-K) in the list above.")
+        return
+    st.caption(f"Compares the {tenk['filed'].iloc[1]:%Y} and {tenk['filed'].iloc[0]:%Y} reports. Most companies keep over "
+               "90% of the wording; a big rewrite, especially new risk language, is worth reading.")
+    if st.button("Compare the last two annual reports"):
+        with st.spinner("Downloading and comparing both reports…"):
+            new_t, old_t = data.sec_document_text(tenk["url"].iloc[0]), data.sec_document_text(tenk["url"].iloc[1])
+        if not new_t or not old_t:
+            st.warning("Couldn't download the reports right now. Use the Open links above to read them.")
+            return
+        ch = catalysts.filing_change(old_t, new_t)
+        ui.metrics([
+            {"label": "Wording kept", "value": ui.fmt_pct(ch["similarity"], 1),
+             "help": "100% = identical wording year over year."},
+            {"label": "Verdict", "value": ch["label"]},
+            {"label": "Length change", "value": ui.fmt_pct(ch["length_change"], 0, True), "delta": ch["section"],
+             "delta_color": "off", "delta_arrow": "off"},
+        ], key="tenk")
+        if ch["new_sentences"]:
+            st.markdown("**New language this year (sample)**")
+            for sent in ch["new_sentences"]:
+                st.markdown(f"> {ui.esc(sent)}")
 
 
 def catalysts_view():
@@ -36,96 +105,51 @@ def catalysts_view():
     earn = catalysts.earnings_summary(ad.get("earnings_dates"))
     ins = catalysts.insider_summary(ad.get("insider_transactions"))
     rb = catalysts.revision_balance(ad.get("eps_revisions"))
-    mcap = ui.num(inf.get("marketCap"))
-    bb = catalysts.net_buyback_yield(fin, mcap)
-    vr = catalysts.volume_read(hist) if not hist.empty else {"note": "No price data.", "rel_volume_20d": np.nan}
+    bb = catalysts.net_buyback_yield(fin, ui.num(inf.get("marketCap")))
+    vr = catalysts.volume_read(hist) if not hist.empty else {"note": "", "rel_volume_20d": np.nan}
 
-    c = st.columns(5)
-    c[0].metric("Next earnings", f"{earn['next_date']:%b %d}" if earn.get("next_date") is not None else "—",
-                help="Earnings reports are the biggest scheduled catalyst. Swing trades held through them carry gap risk.")
-    c[1].metric("Last surprise", ui.fmt_pct(earn["last_surprise"], 0, True),
-                f"{earn['days_since']} days ago" if earn.get("days_since") is not None else None, delta_color="off",
-                help="How far reported EPS beat (+) or missed (−) the analyst estimate. Big beats tend to drift up for ~60 trading days.")
-    c[2].metric("Insider buyers (6m)", ins["buyers"], ui.fmt_money(ins["buy_value"], 1) if ins["buy_value"] else None,
-                delta_color="off", help="Distinct insiders who bought shares on the open market. Buying says more than selling.")
-    c[3].metric("Estimate revisions (30d)", ui.fmt_pct(rb, 0, True) if np.isfinite(rb) else "—",
-                help="Net share of analyst EPS revisions that were upward over the last 30 days.")
-    c[4].metric("Net buyback yield", ui.fmt_pct(bb, 1),
-                help="Last fiscal year's share buybacks minus share issuance, as a % of market cap. Positive means the company is shrinking its share count.")
+    ui.metrics([
+        {"label": "Next earnings", "value": f"{earn['next_date']:%b %d}" if earn.get("next_date") is not None else None,
+         "help": "The biggest scheduled catalyst. Trades held through it carry gap risk."},
+        {"label": "Last EPS surprise", "value": ui.fmt_pct(earn["last_surprise"], 0, True),
+         "delta": f"{earn['days_since']} days ago" if earn.get("days_since") is not None else None,
+         "delta_color": "off", "delta_arrow": "off",
+         "help": "How far reported EPS beat (+) or missed (−) the estimate. Big beats tend to keep drifting up for ~60 trading days."},
+        {"label": "Insider buyers (6m)", "value": str(ins["buyers"]),
+         "delta": ui.fmt_money(ins["buy_value"], 1) if ins["buy_value"] else None, "delta_color": "off", "delta_arrow": "off",
+         "help": "Distinct insiders who bought on the open market. Buying says more than selling."},
+        {"label": "EPS revisions (30d)", "value": ui.fmt_pct(rb, 0, True) if np.isfinite(rb) else None,
+         "help": "Net share of analyst EPS revisions that were upward over the last 30 days."},
+        {"label": "Net buyback yield", "value": ui.fmt_pct(bb, 1),
+         "help": "Last year's buybacks minus share issuance, as a % of market cap. Positive = shrinking share count."},
+    ], key="cat")
 
-    for title, note in (("Earnings drift", earn["note"]), ("Insiders", ins["note"]), ("Volume", vr["note"])):
-        st.markdown(f"**{title}:** {ui.esc(note)}")
-    if isinstance(ins.get("table"), pd.DataFrame) and not ins["table"].empty:
+    notes = [(t, n) for t, n in (("Earnings", earn.get("note")), ("Insiders", ins.get("note")), ("Volume", vr.get("note"))) if n]
+    if notes:
+        st.markdown("<div class='sf-card'>" + "".join(f"<div class='row'><b>{t}</b> · {ui.h(n)}</div>" for t, n in notes)
+                    + "</div>", unsafe_allow_html=True)
+    t = ins.get("table")
+    if isinstance(t, pd.DataFrame) and not t.empty:
         with st.expander("Insider transactions (6 months)"):
-            st.dataframe(ins["table"], hide_index=True, width="stretch")
-
-    st.subheader("SEC filings", help="10-K = annual report, 10-Q = quarterly report, 8-K = a material event "
-                                      "(deal, executive change, results, restructuring). Straight from SEC EDGAR.")
-    filings = data.sec_filings(sym)
-    if filings.empty:
-        st.info("Couldn't reach SEC EDGAR for this ticker right now (or it isn't a US filer).")
-        return
-    eightk = filings[filings["form"] == "8-K"].head(8)
-    if not eightk.empty:
-        st.markdown("**Recent 8-K events**")
-        for _, r in eightk.iterrows():
-            st.markdown(f"- {r['filed']:%b %d, %Y}: {ui.esc(r['what'] or 'Event filing')} ([filing]({r['url']}))")
-    st.dataframe(filings, hide_index=True, width="stretch", column_config={
-        "filed": st.column_config.DateColumn("Filed"), "form": "Form", "reportDate": "Period", "what": "8-K items",
-        "url": st.column_config.LinkColumn("Link", display_text="open")})
-
-    tenk = filings[filings["form"] == "10-K"].head(2)
-    st.subheader("What changed in the annual report",
-                 help="Compares the Risk Factors section of the last two 10-Ks. Companies whose annual report wording "
-                      "changes a lot have tended to underperform afterwards ('Lazy Prices', Cohen, Malloy & Nguyen 2020); "
-                      "new risk language is often the first place bad news shows up.")
-    if len(tenk) < 2:
-        st.info("Need two 10-K filings to compare.")
-    elif st.button("Compare the last two 10-Ks", help="Downloads both filings from EDGAR, so it takes a few seconds."):
-        with st.spinner("Downloading and comparing filings…"):
-            new_t, old_t = data.sec_document_text(tenk["url"].iloc[0]), data.sec_document_text(tenk["url"].iloc[1])
-        if not new_t or not old_t:
-            st.warning("Couldn't download the filings.")
-        else:
-            ch = catalysts.filing_change(old_t, new_t)
-            m = st.columns(3)
-            m[0].metric("Wording similarity", ui.fmt_pct(ch["similarity"], 1),
-                        help="1 = identical wording year over year. Most companies sit above 90%; big drops are a flag.")
-            m[1].metric("Verdict", ch["label"])
-            m[2].metric("Length change", ui.fmt_pct(ch["length_change"], 0, True), ch["section"], delta_color="off")
-            if ch["new_sentences"]:
-                st.markdown("**New language this year (sample)**")
-                for sent in ch["new_sentences"]:
-                    st.markdown(f"> {ui.esc(sent)}")
+            t = t.copy()
+            if "Value" in t:
+                t["Value"] = pd.to_numeric(t["Value"], errors="coerce").map(lambda v: ui.fmt_money(v, 1) if v else "—")
+            if "Shares" in t:
+                t["Shares"] = pd.to_numeric(t["Shares"], errors="coerce").map(lambda v: ui.fmt_big(v, 1))
+            st.dataframe(t, hide_index=True, width="stretch", column_config={
+                "Start Date": st.column_config.DateColumn("Date", format="MMM D, YYYY"), "Text": "What happened"})
+    _filings(sym)
 
 
-query = st.text_input("Search news", placeholder="e.g. Nvidia earnings, tariffs, rate cut") if mode != "Catalysts" else ""
-
-
-def render(q: str):
-    with st.spinner("Loading…"):
-        arts = sentiment.rank_articles(data.news(q), q)
-    agg = sentiment.aggregate_sentiment(arts[:40])
-    st.markdown(ui.pill(f"Sentiment {agg['label']} ({agg['score']:+.2f})", ui.tone(agg["score"], 0.1)) +
-                f"<span class='sf-muted'>{agg['n']} stories · {agg['positive']} positive · {agg['negative']} negative</span>",
-                unsafe_allow_html=True)
-    if not arts:
-        st.info("No news found.")
-    for a in arts[:30]:
-        when = f"{a['published']:%b %d %H:%M}" if a.get("published") else ""
-        summary = sentiment.clean_text(a.get("summary", ""))
-        st.markdown(f"{ui.pill(a['sentiment_label'], ui.tone(a['sentiment'], 0.25))} **[{ui.esc(a['title'])}]({a.get('link') or '#'})**  \n"
-                    f"<span class='sf-muted'>{a.get('publisher', '')} · {when}</span>", unsafe_allow_html=True)
-        if summary and summary.lower() not in a["title"].lower():
-            st.caption(ui.esc(summary[:260]) + ("…" if len(summary) > 260 else ""))
-
-
-if mode == "Catalysts":
+if mode == "Stock catalysts":
     catalysts_view()
-elif query:
-    render(query)
 else:
-    tabs = st.tabs(list(CATEGORIES))
-    for tab, (name, q) in zip(tabs, CATEGORIES.items()):
-        with tab:
-            render(q)
+    query = st.text_input("Search news", placeholder="Search any topic, e.g. Nvidia earnings, tariffs, rate cut",
+                          label_visibility="collapsed")
+    if query:
+        render(query)
+    else:
+        tabs = st.tabs(list(CATEGORIES))
+        for tab, (name, q) in zip(tabs, CATEGORIES.items()):
+            with tab:
+                render(q)

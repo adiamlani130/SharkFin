@@ -9,11 +9,11 @@ import streamlit as st
 
 from sharkfin import data, portfolio, risk, ui
 
-st.title("Portfolio")
+ui.header("Portfolio", "Your holdings with live profit and loss, how risky the mix really is, and what a better-balanced version would look like.")
 ss = st.session_state
 
 # ---- Add / import ---------------------------------------------------------------------
-with st.expander("➕ Add a position", expanded=not ss.portfolio):
+with st.expander("Add a position", expanded=not ss.portfolio):
     with st.form("add_pos", clear_on_submit=True):
         c = st.columns([2, 1, 1, 1])
         sym_in = c[0].text_input("Ticker", placeholder="e.g. MSFT").strip().upper()
@@ -31,7 +31,7 @@ with st.expander("➕ Add a position", expanded=not ss.portfolio):
                 ui.save_state()
                 st.rerun()
 
-with st.expander("⇅ Import / export CSV"):
+with st.expander("Import or export (CSV)"):
     up = st.file_uploader("Import CSV with columns symbol, shares, buy_price (optional: date)", type="csv")
     if up is not None and st.button("Import"):
         df = pd.read_csv(up)
@@ -74,11 +74,13 @@ pos["day_pnl"] = pos["shares"] * (pos["price"] - prev.reindex(pos.index))
 pos["weight"] = pos["value"] / pos["value"].sum()
 
 tv, tc = pos["value"].sum(), pos["cost"].sum()
-m = st.columns(4)
-m[0].metric("Market value", ui.fmt_money(tv))
-m[1].metric("Unrealised P/L", ui.fmt_money(tv - tc), ui.fmt_pct((tv - tc) / tc, 2, True) if tc else None)
-m[2].metric("Today", ui.fmt_money(pos["day_pnl"].sum()), ui.fmt_pct(pos["day_pnl"].sum() / (tv - pos["day_pnl"].sum()), 2, True))
-m[3].metric("Positions", len(pos))
+day = pos["day_pnl"].sum()
+ui.metrics([
+    {"label": "Market value", "value": ui.fmt_money(tv)},
+    {"label": "Total gain", "value": ui.fmt_money(tv - tc), "delta": ui.fmt_pct((tv - tc) / tc, 2, True) if tc else None},
+    {"label": "Today", "value": ui.fmt_money(day), "delta": ui.fmt_pct(day / (tv - day), 2, True) if tv != day else None},
+    {"label": "Positions", "value": str(len(pos))},
+], key="pf")
 
 st.dataframe(pos[["shares", "avg_cost", "price", "value", "weight", "pnl", "pnl_pct", "day_pnl"]], width="stretch",
              column_config={"shares": st.column_config.NumberColumn("Shares", format="%.4g"),
@@ -86,18 +88,18 @@ st.dataframe(pos[["shares", "avg_cost", "price", "value", "weight", "pnl", "pnl_
                             "price": st.column_config.NumberColumn("Price", format="$%.2f"),
                             "value": st.column_config.NumberColumn("Value", format="$%.2f"),
                             "weight": st.column_config.ProgressColumn("Weight", min_value=0, max_value=1, format="percent"),
-                            "pnl": st.column_config.NumberColumn("P/L", format="$%.2f"),
-                            "pnl_pct": st.column_config.NumberColumn("P/L %", format="percent"),
+                            "pnl": st.column_config.NumberColumn("Gain", format="$%.2f"),
+                            "pnl_pct": st.column_config.NumberColumn("Gain %", format="percent"),
                             "day_pnl": st.column_config.NumberColumn("Today", format="$%.2f")})
 
-with st.expander("✏️ Edit lots"):
+with st.expander("Edit or remove purchases"):
     edited = st.data_editor(pd.DataFrame(ss.portfolio), num_rows="dynamic", width="stretch", key="lots_editor")
     if st.button("Save changes"):
         ss.portfolio = [r for r in edited.to_dict("records") if r.get("symbol") and r.get("shares")]
         ui.save_state()
         st.rerun()
 
-tabs = st.tabs(["🥧 Allocation", "⚠️ Risk", "🧮 Optimizer", "⭐ Watchlist"])
+tabs = st.tabs(["Allocation", "Risk", "Optimizer", "Watchlist"])
 
 with tabs[0]:
     l, r = st.columns(2)
@@ -138,33 +140,42 @@ with tabs[1]:
         tbl = pd.DataFrame({"Portfolio": [s_p.get(k) for k in rows], "S&P 500 (SPY)": [s_b.get(k) for k in rows]}, index=rows)
         l, r = st.columns([1, 2])
         with l:
-            st.dataframe(tbl.style.format(lambda v: "—" if v is None or not np.isfinite(v) else f"{v:.2f}" if abs(v) > 1.5 else f"{v:.2%}"),
-                         width="stretch")
+            ratio_rows = {"Sharpe", "Sortino", "Beta", "Information Ratio"}
+            nice = {"CAGR": "Return per year", "Max Drawdown": "Worst drop", "Alpha (ann.)": "Alpha per year",
+                    "VaR 95% (1d)": "Bad day (1 in 20)", "CVaR 95% (1d)": "Avg of worst 5% days"}
+            fmt = lambda k, v: "—" if v is None or not np.isfinite(v) else (f"{v:.2f}" if k in ratio_rows else f"{v:.1%}")
+            st.dataframe(pd.DataFrame({c: [fmt(k, tbl.loc[k, c]) for k in tbl.index] for c in tbl.columns},
+                                      index=[nice.get(k, k) for k in tbl.index]), width="stretch")
             var_d = s_p["CVaR 95% (1d)"] * tv
-            st.metric("1-day 95% expected shortfall", ui.fmt_money(var_d),
-                      help="Average loss on the worst 5% of days, at today's portfolio value.")
-            st.metric("If the S&P 500 falls 10%", ui.fmt_money(-0.10 * s_p.get("Beta", 1) * tv), help="Beta-implied move.")
+            ui.metrics([
+                {"label": "Loss on a bad day", "value": ui.fmt_money(var_d),
+                 "help": "Average loss on the worst 5% of days, at today's portfolio value."},
+                {"label": "If the S&P 500 falls 10%", "value": ui.fmt_money(-0.10 * s_p.get("Beta", 1) * tv),
+                 "help": "What your portfolio would move, based on its beta to the market."},
+            ], key="pfr", cols=2)
         with r:
             eq = pd.DataFrame({"Portfolio": (1 + port).cumprod(), "S&P 500": (1 + spy).cumprod()})
-            fig = go.Figure([go.Scatter(x=eq.index, y=eq[c], name=c) for c in eq])
+            fig = go.Figure([go.Scatter(x=eq.index, y=eq["Portfolio"], name="Your mix", line=dict(color=ui.GREEN, width=2)),
+                             go.Scatter(x=eq.index, y=eq["S&P 500"], name="S&P 500", line=dict(color=ui.MUTED, width=1.4))])
             fig.update_layout(title="Growth of $1")
             ui.plotly(fig, 300)
             dd = risk.drawdown_series(port)
-            fig = go.Figure(go.Scatter(x=dd.index, y=dd * 100, fill="tozeroy", line=dict(color=ui.RED)))
-            fig.update_layout(title="Drawdown (%)")
+            fig = go.Figure(go.Scatter(x=dd.index, y=dd * 100, fill="tozeroy", line=dict(color=ui.RED, width=1),
+                                       fillcolor="rgba(255,92,122,0.18)"))
+            fig.update_layout(title="Drop from peak (%)")
             ui.plotly(fig, 240)
         if len(held) > 1:
             l, r = st.columns(2)
             corr = R.corr()
-            fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, zmin=-1, zmax=1, colorscale="RdBu_r",
+            fig = go.Figure(go.Heatmap(z=corr.values, x=corr.columns, y=corr.index, zmin=-1, zmax=1, colorscale=ui.DIVERGING,
                                        text=np.round(corr.values, 2), texttemplate="%{text}"))
-            fig.update_layout(title="Correlation matrix")
+            fig.update_layout(title="How closely your holdings move together")
             with l:
                 ui.plotly(fig, 420)
             cov = portfolio.shrunk_covariance(R)
             rc = risk.risk_contributions(w.values, cov.values)
-            fig = go.Figure([go.Bar(x=held, y=w.values * 100, name="Capital weight %"),
-                             go.Bar(x=held, y=rc * 100, name="Risk contribution %")])
+            fig = go.Figure([go.Bar(x=held, y=w.values * 100, name="Share of money %", marker_color=ui.BLUE),
+                             go.Bar(x=held, y=rc * 100, name="Share of risk %", marker_color=ui.ORANGE)])
             fig.update_layout(title="Where your risk actually comes from", barmode="group")
             with r:
                 ui.plotly(fig, 420)
@@ -211,16 +222,31 @@ with tabs[2]:
 
 with tabs[3]:
     wl = ss.watchlist
-    add = st.text_input("Add ticker to watchlist").strip().upper()
-    if st.button("Add") and add and add not in wl:
+    c = st.columns([3, 1], vertical_alignment="bottom")
+    add = c[0].text_input("Add a ticker to your watchlist", placeholder="e.g. NVDA").strip().upper()
+    if c[1].button("Add", width="stretch") and add and add not in wl:
         wl.append(add)
         ui.save_state()
         st.rerun()
-    for s in list(wl):
-        c = st.columns([4, 1])
-        c[0].markdown(f"**{s}**")
-        if c[1].button("Remove", key=f"rm_{s}"):
-            wl.remove(s)
+    if not wl:
+        st.caption("Your watchlist is empty. Stocks you add here also appear on the Market Dashboard.")
+    else:
+        wpx = data.download_prices(tuple(wl), period="3mo")
+        rows = []
+        for s_ in wl:
+            col = wpx[s_].dropna() if s_ in wpx else pd.Series(dtype=float)
+            rows.append({"Ticker": s_, "Price": col.iloc[-1] if len(col) else np.nan,
+                         "Today": col.iloc[-1] / col.iloc[-2] - 1 if len(col) > 1 else np.nan,
+                         "1 month": col.iloc[-1] / col.iloc[-22] - 1 if len(col) > 22 else np.nan,
+                         "Trend": col.tolist()[-63:]})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", column_config={
+            "Price": st.column_config.NumberColumn(format="$%.2f"),
+            "Today": st.column_config.NumberColumn(format="percent"), "1 month": st.column_config.NumberColumn(format="percent"),
+            "Trend": st.column_config.LineChartColumn("3 months")})
+        c = st.columns([3, 1], vertical_alignment="bottom")
+        rm = c[0].selectbox("Remove a ticker", wl, index=None, placeholder="Pick a ticker to remove")
+        if c[1].button("Remove", width="stretch", disabled=rm is None):
+            wl.remove(rm)
             ui.save_state()
             st.rerun()
 

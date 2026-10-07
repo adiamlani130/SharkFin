@@ -88,10 +88,10 @@ def stream_report(dossier: dict) -> Iterator[str]:
             elif final.stop_reason == "max_tokens":
                 yield "\n\n_(Report truncated.)_"
     except anthropic.AuthenticationError:
-        yield "⚠️ The Anthropic API key was rejected. Check `ANTHROPIC_API_KEY`."
+        yield "The Anthropic API key was rejected. Check `ANTHROPIC_API_KEY`."
     except anthropic.RateLimitError:
-        yield "⚠️ Rate limited by the Anthropic API. Try again in a minute."
+        yield "Rate limited by the Anthropic API. Try again in a minute."
     except anthropic.APIStatusError as e:
-        yield f"⚠️ Anthropic API error ({e.status_code}): {e.message}"
+        yield f"Anthropic API error ({e.status_code}): {e.message}"
     except anthropic.APIConnectionError:
-        yield "⚠️ Could not reach the Anthropic API."
+        yield "Could not reach the Anthropic API."

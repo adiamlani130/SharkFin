@@ -95,6 +95,10 @@ TERMS = {
     "resistance": "The nearest price zone above where the stock turned down before. Rallies often stall there.",
     "support": "The nearest price zone below where the stock bounced before. Pullbacks often hold there.",
     "weekly_trend": "The long-term trend on the weekly chart: price vs its 40-week average (≈ 200-day) and the 10-week vs 40-week.",
+    "dcf": "A discounted cash flow model: project the free cash flow the business will generate, then discount it back to today at the return investors require. It is only as good as the growth and discount-rate assumptions, which you can change.",
+    "implied_growth": "Reverse DCF: the yearly free-cash-flow growth the current share price already assumes. If that looks too high to you, the stock is expensive; if too low, it may be cheap.",
+    "p_undervalued": "The model is re-run 5,000 times with growth, discount rate and cash flow randomly nudged. This is the share of runs that come out above today's price.",
+    "peers": "What the stock would be worth if it traded at the same multiples (P/E, EV/EBITDA, EV/Sales, P/FCF) as similar companies. The blended peer value is the geometric mean of the implied prices.",
     "core_long": "A checklist for multi-year holds: profitability, balance-sheet quality, cash generation, sensible valuation, trend and analyst revisions.",
 }
 

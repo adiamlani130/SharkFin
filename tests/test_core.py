@@ -347,7 +347,48 @@ def test_filing_change_finds_new_risk_language():
 
 def test_core_long_screen_filters_value_traps():
     from sharkfin import catalysts
-    df = pd.DataFrame({"Quality": [1.0, 1.2, -0.5, 0.8], "Value": [0.5, 0.2, 1.0, -1.0], "Momentum": [0.3, -0.2, 0.5, 0.1],
-                       "mom_12_1": [0.2, -0.1, 0.3, 0.1], "trend_200": [0.05, -0.02, 0.1, 0.02]}, index=list("ABCD"))
-    out = catalysts.core_long_screen(df)
-    assert list(out.index) == ["A"]  # B has negative momentum, C low quality, D expensive
+    idx = list("ABCDE")
+    df = pd.DataFrame({"Value": [0.5, 0.2, 1.0, -1.5, 0.3], "mom_12_1": [0.2, -0.1, 0.3, 0.1, 0.4],
+                       "trend_200": [0.05, -0.02, 0.1, 0.02, 0.1], "fip": [0.1, 0.1, 0.1, 0.1, 0.12],
+                       "volatility": [0.2, 0.2, 0.25, 0.2, 0.9], "Sector": ["Technology"] * 5}, index=idx)
+    inf = pd.DataFrame({"netIncomeToCommon": [1e9, 1e9, -1e8, 1e9, 1e9], "freeCashflow": [1e9] * 5,
+                        "totalDebt": [1e9] * 5, "totalCash": [5e8] * 5, "ebitda": [2e9] * 5}, index=idx)
+    out, funnel = catalysts.core_long_screen(df, inf)
+    # B downtrend, C loses money, D expensive, E too volatile
+    assert list(out.index) == ["A"]
+    assert funnel[0]["Still in"] == 5 and funnel[-1]["Still in"] == 1
+    assert [f["Still in"] for f in funnel] == sorted([f["Still in"] for f in funnel], reverse=True)
+
+
+def _ohlc(close):
+    idx = pd.bdate_range("2020-01-01", periods=len(close))
+    c = pd.Series(close, index=idx, dtype=float)
+    return pd.DataFrame({"Open": c, "High": c * 1.01, "Low": c * 0.99, "Close": c, "Volume": 1e6})
+
+
+def test_builder_fills_next_open_and_stops():
+    from sharkfin import builder
+    close = [100.0] * 60 + [101.0] + [102.0] * 5 + [90.0] * 10 + [95.0] * 20
+    d = _ohlc(close)
+    d.iloc[61, d.columns.get_loc("Open")] = 100.5  # day after the signal opens here
+    s = {"logic": "ALL", "entry": [builder.C("Price", "crosses above", value=100.5)], "exit": [], "stop": 5.0}
+    r = builder.run(d, s, cost_bps=0)
+    t = r["trades"].iloc[0]
+    assert t["Entry date"] == d.index[61] and t["Entry"] == 100.5  # signal on day 60's close, filled next open
+    assert t["Exit reason"] == "Stop loss" and t["Exit"] == 90.0  # gapped through the stop: filled at the open
+    assert r["stats"]["Trades"] == 1
+
+
+def test_builder_templates_run_and_describe():
+    from sharkfin import builder
+    rng = np.random.default_rng(0)
+    d = _ohlc(100 * np.exp(np.cumsum(rng.normal(0.0005, 0.015, 900))))
+    for name in builder.TEMPLATES:
+        r = builder.run(d, builder.template(name), 5, 0.02)
+        assert np.isfinite(r["stats"]["Return per year"])
+        assert len(r["equity"]) == len(r["bh_equity"])
+    buy, sell = builder.describe_strategy(builder.template("Golden cross"))
+    assert buy == "SMA(50) crosses above SMA(200)" and sell == "SMA(50) crosses below SMA(200)"
+    runs = builder.compare_templates(d, ["Golden cross", "55-day breakout"], 5, 0.0)
+    a, b = runs.values()
+    assert a["equity"].index[0] == b["equity"].index[0]
