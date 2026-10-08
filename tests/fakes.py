@@ -85,6 +85,7 @@ def install(monkeypatch):
     monkeypatch.setattr(data, "quarterly_financials", financials)
     monkeypatch.setattr(data, "news", news)
     monkeypatch.setattr(data, "risk_free_rate", lambda: 0.042)
+    monkeypatch.setattr(data, "tbill_yields", lambda period="10y": pd.Series(0.04, index=history("^IRX").index))
     monkeypatch.setattr(data, "analyst_data", analyst_data)
     monkeypatch.setattr(data, "download_ohlcv", download_ohlcv)
     monkeypatch.setattr(data, "sec_filings", sec_filings)

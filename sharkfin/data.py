@@ -274,6 +274,18 @@ def risk_free_rate() -> float:
     return 0.042
 
 
+@ttl_cache(6 * 3600)
+def tbill_yields(period: str = "10y") -> pd.Series:
+    """3-month Treasury bill yield (decimal) by day: what idle cash earns in a backtest."""
+    h = history("^IRX", period)
+    if h.empty:
+        return pd.Series(dtype=float)
+    y = h["Close"] / 100
+    y.index = y.index.normalize()
+    y = y[~y.index.duplicated(keep="last")]
+    return y[(y >= 0) & (y < 0.2)]
+
+
 MARKET_TICKERS = {
     "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Dow": "^DJI", "Russell 2000": "^RUT", "VIX": "^VIX",
     "10Y Yield": "^TNX", "Dollar": "DX-Y.NYB", "Gold": "GC=F", "Oil (WTI)": "CL=F", "Bitcoin": "BTC-USD",

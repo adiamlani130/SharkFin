@@ -1,11 +1,12 @@
-"""Top Performers: multi-factor rankings, swing setups, core longs and a check that the ranking works."""
+"""Top Performers: multi-factor rankings, Leader Dip swing setups, core longs, the sector VST list and a check
+that the ranking works."""
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import catalysts, data, factors, risk, swing, ui
+from sharkfin import catalysts, data, factors, leader_dip, ratings, risk, ui
 from sharkfin.explain import tip
 
 ui.header("Top Performers",
@@ -65,29 +66,29 @@ def factor_backtest(symbols: tuple, weights: tuple):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def swing_scan(symbols: tuple) -> pd.DataFrame:
-    ohlcv = data.download_ohlcv(symbols, period="2y")
-    if "Close" not in ohlcv:
+def sp500_gains() -> pd.Series:
+    """Every S&P 500 stock's 6-month gain: the yardstick for Leader Dip's strength rank."""
+    sp = data.download_prices(tuple(data.universe("S&P 500")), period="2y")
+    return leader_dip.six_month_gain(sp.ffill()).iloc[-1].dropna() if not sp.empty else pd.Series(dtype=float)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def market_close() -> pd.Series:
+    m = data.market_history("2y")
+    return m["Close"] if not m.empty else pd.Series(dtype=float)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def sector_ratings(symbols: tuple, with_fund: bool, weights: tuple) -> pd.DataFrame:
+    scores_, px_, info_ = scan(symbols, with_fund, weights)
+    if scores_ is None:
         return pd.DataFrame()
-    mkt = data.market_history("2y")
-    mc = mkt["Close"] if not mkt.empty else None
-    rows = []
-    for s_ in ohlcv["Close"].columns:
-        try:
-            df = pd.DataFrame({f: ohlcv[f][s_] for f in ("Open", "High", "Low", "Close", "Volume") if f in ohlcv}).dropna()
-            if len(df) < 260 or "Volume" not in df:
-                continue
-            plan = swing.trade_plan(df.iloc[-320:], mc)
-        except Exception:
-            continue
-        if plan["tone"] == "neg":
-            continue
-        rows.append({"Symbol": s_, "Status": "Triggered" if plan["triggered"] else "Forming", "Score": plan["score"],
-                     "Price": plan["price"], "Entry": plan["entry"], "Stop": plan["stop"], "Risk %": plan["risk_pct"],
-                     "T1": plan["t1"], "T2": plan["t2"], "Resistance": plan["resistance"], "Weekly": plan["weekly"]["label"]})
-    if not rows:
-        return pd.DataFrame()
-    return pd.DataFrame(rows).set_index("Symbol").sort_values(["Status", "Score"], ascending=[False, False])
+    return ratings.ratings(px_, scores_["Sector"], info_ if with_fund else None, data.risk_free_rate())
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def log_prices(symbols: tuple) -> dict:
+    return data.download_ohlcv(symbols, period="6mo")
 
 
 syms = get_universe(uni_name)
@@ -113,7 +114,7 @@ if use_fund and n_fund < 0.8 * len(scores):
     st.warning(f"Yahoo only returned company data for {n_fund} of {len(scores)} stocks (it rate-limits bursts of requests), "
                "so fundamental themes are missing for the rest. Re-run the scan in a few minutes to fill them in.")
 
-tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Does the ranking work?"])
+tabs = st.tabs(["Rankings", "Leader Dip setups", "Core longs", "Sector VST list", "Does the ranking work?"])
 
 
 def card(row, sym, kind):
@@ -126,6 +127,140 @@ def card(row, sym, kind):
         f"{ui.h(ui.fmt_money(row['Price']))} · 1M {ui.fmt_pct(row.get('ret_1m'), 1, True)} · "
         f"12M {ui.fmt_pct(row.get('mom_12_1'), 0, True)}</div><div class='row'>{drivers}</div></div>",
         unsafe_allow_html=True)
+
+
+LOG = "leader_dip_log"
+
+
+def log_signals(today: pd.DataFrame, asof, market_ok: bool | None):
+    """Add today's signals to the saved log (one row per date and ticker)."""
+    log = ui.load_list(LOG)
+    seen = {(r.get("Date"), r.get("Symbol")) for r in log}
+    day = f"{pd.Timestamp(asof):%Y-%m-%d}"
+    new = [{"Date": day, "Symbol": sym_, "Close": round(float(r_["Price"]), 4), "Limit": round(float(r_["Limit"]), 4),
+            "RSI2": round(float(r_["RSI2"]), 1), "Strength": round(float(r_["Strength"]), 3), "Market on": market_ok}
+           for sym_, r_ in today.iterrows() if (day, sym_) not in seen]
+    if new:
+        ui.save_list(LOG, log + new)
+
+
+def leader_dip_tab():
+    st.markdown(
+        "<div class='sf-note'><b>Leader Dip</b> buys a sharp two-day drop in one of the market's strongest stocks while "
+        "the market is in an uptrend, and sells into the bounce. A stock signals when its <b>2-day RSI is below 10</b>, "
+        "it is <b>above its 200-day average</b>, and its <b>6-month gain beats 70% of the S&amp;P 500</b>. "
+        f"{ui.h(leader_dip.ENTRY_RULE)} {ui.h(leader_dip.EXIT_RULE)}</div>", unsafe_allow_html=True)
+    mc = market_close()
+    m_on = leader_dip.market_on(mc)
+    switch = bool(m_on.iloc[-1]) if len(m_on) else None
+    ref = sp500_gains()
+    now = leader_dip.latest(px, ref if len(ref) else None)
+    asof = px.index[-1]
+    sig = now[now["Signal"]].sort_values("6-month gain", ascending=False)
+    if switch is False:
+        st.warning("Market switch is **off**: SPY closed below its 200-day average, so the system places no new trades. "
+                   "Signals below are for reference only.")
+    st.caption(f"Signals at the {asof:%b %d, %Y} close, strongest first. Leader Dip holds up to {leader_dip.SLOTS} "
+               "trades at once, so with more signals than free slots, take them from the top.")
+    if sig.empty:
+        st.info("No stock in this list signalled at the last close. Leader Dip fires on only a few stocks a week, and "
+                "less often in calm, rising markets.")
+    else:
+        if switch is not False:
+            log_signals(sig, asof, switch)
+        show = sig.join(scores[["Name", "Sector"]], how="left")
+        st.dataframe(show[["Name", "Price", "Limit", "RSI2", "vs 200-day", "6-month gain", "Strength", "Sector"]],
+                     width="stretch", column_config={
+                         "Price": st.column_config.NumberColumn("Close", format="$%.2f"),
+                         "Limit": st.column_config.NumberColumn("Limit buy (next session)", format="$%.2f",
+                                                                help=tip("ld_limit")),
+                         "RSI2": st.column_config.NumberColumn("2-day RSI", format="%.1f", help=tip("ld_rsi2")),
+                         "vs 200-day": st.column_config.NumberColumn(format="percent"),
+                         "6-month gain": st.column_config.NumberColumn(format="percent"),
+                         "Strength": st.column_config.ProgressColumn("Strength rank", min_value=0, max_value=1,
+                                                                     format="percent", help=tip("ld_strength"))})
+    near = now[now["Uptrend"] & now["Leader"] & ~now["Signal"] & (now["RSI2"] < 30)].sort_values("RSI2")
+    if len(near):
+        with st.expander(f"Dips forming ({len(near)}): leaders in an uptrend with a 2-day RSI under 30"):
+            st.dataframe(near.join(scores[["Name"]], how="left")[["Name", "Price", "RSI2", "6-month gain", "Strength"]],
+                         width="stretch", column_config={
+                             "Price": st.column_config.NumberColumn("Close", format="$%.2f"),
+                             "RSI2": st.column_config.NumberColumn("2-day RSI", format="%.1f"),
+                             "6-month gain": st.column_config.NumberColumn(format="percent"),
+                             "Strength": st.column_config.ProgressColumn("Strength rank", min_value=0, max_value=1,
+                                                                         format="percent")})
+    log = pd.DataFrame(ui.load_list(LOG))
+    with st.expander(f"Signal log ({len(log)} signals saved)", expanded=False):
+        st.caption("Every signal this page shows while the market switch is on is saved here, then checked against what "
+                   "happened next: did the limit fill, and how did the trade end under the exit rules? Over time this "
+                   "shows whether live results match the backtest (about 67% winners, +1.4% a trade, ~6-day holds).")
+        if log.empty:
+            st.caption("Nothing logged yet.")
+            return
+        with st.spinner("Checking logged signals against prices since…"):
+            fu = leader_dip.follow_up(log, log_prices(tuple(sorted(log["Symbol"].unique()))))
+        filled = fu[fu["Filled"] == True]  # noqa: E712 (column holds True/False/None)
+        closed = filled[filled["Status"] == "Closed"]
+        decided = fu["Filled"].notna().sum()
+        ui.metrics([
+            {"label": "Signals logged", "value": f"{len(fu)}"},
+            {"label": "Limit filled", "value": ui.fmt_pct(len(filled) / decided, 0) if decided else None,
+             "help": "Share of signals where the next day's low reached the limit price."},
+            {"label": "Closed trades", "value": f"{len(closed)}"},
+            {"label": "Winning trades", "value": ui.fmt_pct((closed["Return"] > 0).mean(), 0) if len(closed) else None,
+             "help": "Backtest: about 67%."},
+            {"label": "Avg trade", "value": ui.fmt_pct(closed["Return"].mean(), 1, True) if len(closed) else None,
+             "help": "Before costs. Backtest: about +1.4% after costs."},
+        ], key="ldlog")
+        st.dataframe(fu.iloc[::-1], hide_index=True, width="stretch", column_config={
+            "Date": st.column_config.TextColumn("Signal date"),
+            "Close": st.column_config.NumberColumn(format="$%.2f"),
+            "Limit": st.column_config.NumberColumn(format="$%.2f"),
+            "Strength": st.column_config.NumberColumn(format="percent"),
+            "Fill price": st.column_config.NumberColumn(format="$%.2f"),
+            "Exit date": st.column_config.DateColumn(format="MMM D, YYYY"),
+            "Exit price": st.column_config.NumberColumn(format="$%.2f"),
+            "Return": st.column_config.NumberColumn(format="percent")})
+        st.download_button("Download the log (CSV)", fu.to_csv(index=False).encode(), "leader_dip_log.csv", "text/csv")
+        st.caption("The log is saved on the server next to your watchlist. A redeploy of the app can clear it, so "
+                   "download a copy now and then.")
+
+
+def vst_tab():
+    st.markdown(
+        "<div class='sf-note'>SharkFin's versions of VectorVest's ratings, each ranked <b>within the stock's own sector</b> "
+        "on a 0-2 scale (1 = the sector's middle stock): <b>RV</b> value, <b>RT</b> price trend vs the market, "
+        "<b>RS</b> safety, <b>CI</b> comfort (avoiding deep declines) and <b>VST</b>, which combines RV, RT and RS. "
+        "<b>On their own the ratings barely predict next month's return.</b> What held up in the research was a steady "
+        "weekly list: the 20 highest VSTs among stocks with a steady past-year climb, re-checked each Friday, holding "
+        "a stock until it falls out of the top 60, and sitting in cash while the S&amp;P 500 is below its 10-month "
+        "average. That made 10-11% a year in every test period with a worst drop of 16%: steadier than "
+        "Leader Dip, not stronger.</div>", unsafe_allow_html=True)
+    if not use_fund:
+        st.info("Turn on **Include fundamentals and analyst data** above: RV needs each company's earnings.")
+        return
+    rat = sector_ratings(tuple(syms), use_fund, tuple(sorted(tw.items())))
+    if rat.empty or rat["VST"].notna().sum() < 25:
+        st.info("Not enough company data came back to rate this list. Pick a bigger universe or re-run in a few minutes.")
+        return
+    reg = leader_dip.regime(market_close()) if len(market_close()) else {}
+    if reg.get("ten_month_on") is False:
+        st.warning("The S&P 500 closed last month below its 10-month average, so this list's rule is to hold cash "
+                   "until a month ends back above it.")
+    elif reg.get("ten_month_on"):
+        st.caption(f"The S&P 500 closed {reg['month_end']:%B} above its 10-month average, so the list is on.")
+    top = ratings.vst_list(rat, scores["fip"] if "fip" in scores else None)
+    show = top.join(scores[["Name", "Sector", "Price"]], how="left")
+    cfg = {k: st.column_config.NumberColumn(ratings.NAMES[k], format="%.2f", help=ratings.HELP[k]) for k in ratings.NAMES}
+    st.dataframe(show[["Name", "Sector", "Price", "VST", "RV", "RT", "RS", "CI", "VST rank"]], width="stretch",
+                 column_config={**cfg, "Price": st.column_config.NumberColumn(format="$%.2f"),
+                                "VST rank": st.column_config.NumberColumn("Rank in list", format="%d",
+                                                                          help="Sell a holding once it drops below 60th.")})
+    with st.expander("Every stock's ratings"):
+        allr = rat.join(scores[["Name", "Sector"]], how="left").sort_values("VST", ascending=False)
+        st.dataframe(allr[["Name", "Sector", "VST", "RV", "RT", "RS", "CI"]], width="stretch", height=420, column_config=cfg)
+    st.caption("Ratings use today's prices and Yahoo's latest company data. Research & Valuation shows the same ratings "
+               "for any single stock.")
 
 
 with tabs[0]:
@@ -155,36 +290,7 @@ with tabs[0]:
     st.download_button("Download ranking (CSV)", scores[show].to_csv().encode(), "sharkfin_scan.csv", "text/csv")
 
 with tabs[1]:
-    st.markdown("<div class='sf-note'>Stocks where the <b>Confluence Pullback</b> swing setup has triggered today or is "
-                "forming: the market and the stock are in uptrends, price has pulled back to the 20-day EMA or 50-day "
-                "average, and enough confirming signals line up. Strategy Lab → Swing system shows how it has performed.</div>",
-                unsafe_allow_html=True)
-    if st.button(f"Check {px.shape[1]} charts for setups", key="swing_scan"):
-        st.session_state.swing_ran = True
-    if st.session_state.get("swing_ran"):
-        with st.spinner("Checking every chart…"):
-            setups = swing_scan(tuple(px.columns))
-        if setups.empty:
-            st.info("No stock passes the must-pass rules today. That's normal in a weak or choppy market.")
-        else:
-            setups = setups.join(scores[["Name", "Sector"]], how="left")
-            n_trig = int((setups["Status"] == "Triggered").sum())
-            st.caption(f"{n_trig} triggered today (buy at the next open) and {len(setups) - n_trig} forming "
-                       "(buy only above today's high).")
-            st.dataframe(setups[["Name", "Status", "Score", "Price", "Entry", "Stop", "Risk %", "T1", "T2", "Resistance",
-                                 "Weekly", "Sector"]], width="stretch", column_config={
-                "Status": st.column_config.TextColumn(help=tip("trade_status")),
-                "Score": st.column_config.ProgressColumn(min_value=0, max_value=6, format="%d", help=tip("min_score")),
-                "Price": st.column_config.NumberColumn(format="$%.2f"),
-                "Entry": st.column_config.NumberColumn(format="$%.2f", help=tip("entry")),
-                "Stop": st.column_config.NumberColumn(format="$%.2f", help=tip("stop")),
-                "Risk %": st.column_config.NumberColumn(format="percent", help=tip("risk_r")),
-                "T1": st.column_config.NumberColumn("Target 1", format="$%.2f", help=tip("t1")),
-                "T2": st.column_config.NumberColumn("Target 2", format="$%.2f", help=tip("t2")),
-                "Resistance": st.column_config.NumberColumn(format="$%.2f", help=tip("resistance")),
-                "Weekly": st.column_config.TextColumn("Weekly trend", help=tip("weekly_trend")),
-            })
-            st.caption("Open a ticker on Research & Valuation → Trade setup for the full checklist and chart.")
+    leader_dip_tab()
 
 with tabs[2]:
     st.markdown(f"<div class='sf-note'>{catalysts.CORE_LONG_INTRO}</div>", unsafe_allow_html=True)
@@ -220,6 +326,9 @@ with tabs[2]:
                        "than concentrating. Check each one on Research & Valuation → Trade setup (long-term checklist).")
 
 with tabs[3]:
+    vst_tab()
+
+with tabs[4]:
     st.markdown("<div class='sf-note'>A ranking is only useful if the stocks at the top actually go on to do better. "
                 "This replays the last ~4 years: every month, buy the top 20% of this list by the <b>price-based</b> themes "
                 "(momentum, trend, low risk, reversal) using only the data available at the time, hold for a month, "
