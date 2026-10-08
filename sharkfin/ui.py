@@ -361,6 +361,21 @@ def init_state():
     ss.setdefault("symbol", "AAPL")
 
 
+def load_list(name: str) -> list:
+    """A list saved next to the portfolio and watchlist (e.g. the Leader Dip signal log)."""
+    return _load(name)
+
+
+def save_list(name: str, rows: list) -> bool:
+    try:
+        p = DATA_DIR / f"{name}.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(rows, indent=1, default=str))
+        return True
+    except Exception:
+        return False
+
+
 def save_state():
     try:
         for name in ("portfolio", "watchlist"):

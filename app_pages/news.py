@@ -107,6 +107,17 @@ def catalysts_view():
     rb = catalysts.revision_balance(ad.get("eps_revisions"))
     bb = catalysts.net_buyback_yield(fin, ui.num(inf.get("marketCap")))
     vr = catalysts.volume_read(hist) if not hist.empty else {"note": "", "rel_volume_20d": np.nan}
+    mkt = data.market_history("2y")
+    beat = catalysts.earnings_beat_flag(ad.get("earnings_dates"), hist["Close"] if not hist.empty else pd.Series(dtype=float),
+                                        mkt["Close"] if not mkt.empty else None)
+
+    if beat["active"]:
+        st.markdown(f"<div class='sf-card buy'>{ui.pill('Big earnings beat', 'pos')}<span class='sf-note'>"
+                    f"{ui.h(beat['note'])}</span></div>", unsafe_allow_html=True)
+        if sym not in st.session_state.watchlist and st.button(f"Add {sym} to my watchlist", key="beat_watch"):
+            st.session_state.watchlist.append(sym)
+            ui.save_state()
+            st.rerun()
 
     ui.metrics([
         {"label": "Next earnings", "value": f"{earn['next_date']:%b %d}" if earn.get("next_date") is not None else None,
@@ -124,7 +135,8 @@ def catalysts_view():
          "help": "Last year's buybacks minus share issuance, as a % of market cap. Positive = shrinking share count."},
     ], key="cat")
 
-    notes = [(t, n) for t, n in (("Earnings", earn.get("note")), ("Insiders", ins.get("note")), ("Volume", vr.get("note"))) if n]
+    notes = [(t, n) for t, n in (("Earnings", earn.get("note")), ("Big-beat flag", None if beat["active"] else beat["note"]),
+                                 ("Insiders", ins.get("note")), ("Volume", vr.get("note"))) if n]
     if notes:
         st.markdown("<div class='sf-card'>" + "".join(f"<div class='row'><b>{t}</b> · {ui.h(n)}</div>" for t, n in notes)
                     + "</div>", unsafe_allow_html=True)

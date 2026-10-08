@@ -69,6 +69,65 @@ def earnings_summary(earnings_dates: pd.DataFrame | None, now: pd.Timestamp | No
     return out
 
 
+BEAT_MIN, JUMP_MIN, DRIFT_DAYS = 0.05, 0.04, 60
+
+
+def earnings_beat_flag(earnings_dates: pd.DataFrame | None, close: pd.Series, market_close: pd.Series | None = None) -> dict:
+    """Flag a big beat the market confirmed: EPS beat the estimate by more than 5% AND the stock rose more than 4%
+    above the market over the two days around the report (to the close of the first trading day after it).
+
+    In SharkFin's research (S&P 500, 2000-26) these drifted about 1% further than the average stock over the next 60
+    trading days and 64% were winners, but holding them as a portfolio had a 47% worst drop, so they are a
+    watchlist, not a system."""
+    out = {"flag": False, "active": False, "report_date": None, "surprise": np.nan, "jump": np.nan,
+           "days_since": None, "note": ""}
+    if not isinstance(earnings_dates, pd.DataFrame) or earnings_dates.empty or "Reported EPS" not in earnings_dates:
+        return out
+    ed = earnings_dates.copy()
+    ed.index = pd.to_datetime(ed.index)
+    if ed.index.tz is not None:
+        ed.index = ed.index.tz_convert("America/New_York").tz_localize(None)
+    rep = ed.dropna(subset=["Reported EPS"]).sort_index()
+    c = close.dropna()
+    if rep.empty or len(c) < 3:
+        return out
+    last = rep.iloc[-1]
+    day = rep.index[-1].normalize()
+    sur = last.get("Surprise(%)", np.nan)
+    if not np.isfinite(sur) and last.get("EPS Estimate"):
+        sur = (last["Reported EPS"] / last["EPS Estimate"] - 1) * 100
+    i = int(c.index.searchsorted(day + pd.Timedelta(days=1)))
+    if i >= len(c) or i < 2:
+        return out
+    jump = float(c.iloc[i] / c.iloc[i - 2] - 1)
+    if market_close is not None and len(market_close):
+        m = market_close.reindex(c.index).ffill()
+        if np.isfinite(m.iloc[i]) and np.isfinite(m.iloc[i - 2]):
+            jump -= float(m.iloc[i] / m.iloc[i - 2] - 1)
+    surprise = float(sur) / 100 if np.isfinite(sur) else np.nan
+    since = len(c) - 1 - i
+    flag = bool(np.isfinite(surprise) and surprise > BEAT_MIN and jump > JUMP_MIN)
+    out.update(flag=flag, active=flag and since <= DRIFT_DAYS, report_date=rep.index[-1], surprise=surprise, jump=jump,
+               days_since=since)
+    vs = " relative to the market" if market_close is not None else ""
+    if out["active"]:
+        out["note"] = (f"Beat by {surprise:.0%} on {rep.index[-1]:%b %d} and the stock rose {jump:.1%}{vs} over the two days "
+                       f"around the report, {since} trading days ago. Stocks like this drifted about 1% further than the average "
+                       f"stock over the next {DRIFT_DAYS} trading days and 64% were winners. Held as a portfolio they "
+                       "had a 47% worst drop, so treat it as a watchlist name, not a buy signal on its own.")
+    elif flag:
+        out["note"] = (f"Big beat with a strong reaction on {rep.index[-1]:%b %d}, but that was {since} trading days ago, "
+                       f"past the ~{DRIFT_DAYS}-day drift window.")
+    else:
+        why = [] if np.isfinite(surprise) and surprise > BEAT_MIN else [
+            f"the beat was {surprise:+.0%}" if np.isfinite(surprise) else "the surprise is unknown"]
+        if jump <= JUMP_MIN:
+            why.append(f"the two-day move was {jump:+.1%}{vs}")
+        out["note"] = (f"Last report {rep.index[-1]:%b %d}: no big-beat flag ({' and '.join(why)}; the flag needs a beat over "
+                       f"{BEAT_MIN:.0%} and a jump over {JUMP_MIN:.0%}).")
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Insiders
 # ---------------------------------------------------------------------------

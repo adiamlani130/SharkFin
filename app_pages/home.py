@@ -10,7 +10,7 @@ import streamlit as st
 from pandas.tseries.holiday import (AbstractHolidayCalendar, GoodFriday, Holiday, USLaborDay, USMartinLutherKingJr,
                                     USMemorialDay, USPresidentsDay, USThanksgivingDay, nearest_workday)
 
-from sharkfin import data, sentiment, ui
+from sharkfin import data, leader_dip, sentiment, ui
 from sharkfin import indicators as ind
 
 
@@ -99,6 +99,42 @@ if len(spx) > 200:
          "help": "VIX minus realised volatility. Positive (the usual state) means options price in more risk than is "
                  "showing up; negative is a stress signal."},
     ], key="pulse")
+
+# ---- Market regime light -----------------------------------------------------
+@st.cache_data(ttl=600, show_spinner=False)
+def spy_regime() -> dict:
+    m = data.market_history("2y")
+    return leader_dip.regime(m["Close"]) if not m.empty else {}
+
+
+reg = spy_regime()
+if reg:
+    on = reg["leader_dip_on"]
+    band = reg["band_on"]
+    ten = reg["ten_month_on"]
+    st.subheader("Market regime", help="Slow trend switches on SPY. In SharkFin's research these halved drawdowns, "
+                                       "while faster timing signals whipsawed and lagged plain holding.")
+    lines = [
+        f"<div class='row'><b>200-day line</b> · SPY is <b>{abs(reg['gap200']):.1%} {'above' if on else 'below'}</b> its "
+        f"200-day average, so Leader Dip's switch is <b>{'on: new trades allowed' if on else 'off: no new trades'}</b>.</div>",
+        f"<div class='row'><b>200-day with a 2% band</b> · "
+        f"{'Uptrend' if band else 'Downtrend' if band is False else 'Not set yet'}. It only flips on a close more than 2% "
+        f"through the average, so it changed {reg['band_flips_1y']} time{'s' if reg['band_flips_1y'] != 1 else ''} in the "
+        "past year.</div>",
+    ]
+    if ten is not None:
+        lines.append(
+            f"<div class='row'><b>10-month average</b> · SPY closed {reg['month_end']:%B} "
+            f"<b>{'above' if ten else 'below'}</b> it ({ui.fmt_money(reg['month_close']).replace('$', '&#36;')} vs "
+            f"{ui.fmt_money(reg['ten_month_avg']).replace('$', '&#36;')}). Checked once a month: "
+            f"{'stay invested' if ten else 'long-term trend money waits in cash'} until the next month end.</div>")
+    lines.append(
+        f"<div class='row'><b>Idle cash</b> · {'SPY' if on else 'T-bills'}. Leader Dip's best mix kept money it "
+        "wasn't using in SPY while SPY was above its 200-day, and in T-bills otherwise.</div>")
+    pill_txt = "Leader Dip on" if on else "Leader Dip off"
+    st.markdown(f"<div class='sf-card'>{ui.pill(pill_txt, 'pos' if on else 'neg')}"
+                f"{ui.pill('10-month: ' + ('up' if ten else 'down'), 'pos' if ten else 'neg') if ten is not None else ''}"
+                f"{''.join(lines)}</div>", unsafe_allow_html=True)
 
 # ---- Sector rotation ---------------------------------------------------------
 st.subheader("Sectors", help="SPDR sector ETFs. The heatmap shows returns; the map shows which sectors are leading and "

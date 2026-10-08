@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from sharkfin import builder, data, swing, ui
+from sharkfin import builder, data, leader_dip, ui
 from sharkfin.explain import tip
 
 ui.header("Strategy Lab",
@@ -101,7 +101,7 @@ def condition_rows(kind: str):
 
 
 # ---------------------------------------------------------------------------
-tabs = st.tabs(["Build and test", "Compare strategies", "Swing system"])
+tabs = st.tabs(["Build and test", "Compare strategies", "Leader Dip (S&P 500)"])
 
 def build_tab():
     names = list(builder.TEMPLATES)
@@ -335,114 +335,122 @@ with tabs[1]:
                    "Build and test to tweak the rules.")
 
 # ---------------------------------------------------------------------------
-with tabs[2]:
-    st.markdown("<div class='sf-note'>SharkFin's own swing-trading system, the same one behind <b>Trade setup</b> on "
-                "Research &amp; Valuation: in an uptrend, buy a pullback to the 20-day or 50-day average once price "
-                "turns back up and enough signals agree. It sells part at the first target and trails the rest.</div>",
-                unsafe_allow_html=True)
-    with st.expander("Settings"):
-        st.caption("Must-pass rules all have to be true. Point rules each add 1 to the score; a trade needs the minimum score.")
-        enabled = {}
-        req = [k for k, r in swing.RULES.items() if r.kind == "required"]
-        pts = [k for k, r in swing.RULES.items() if r.kind == "point"]
-        l, r = st.columns(2)
-        l.markdown("**Must pass**")
-        for k in req:
-            enabled[k] = l.toggle(swing.RULES[k].label, swing.RULES[k].default, key=f"cp_{k}", help=swing.RULES[k].explain)
-        r.markdown("**Points**")
-        for k in pts:
-            enabled[k] = r.toggle(swing.RULES[k].label, swing.RULES[k].default, key=f"cp_{k}", help=swing.RULES[k].explain)
-        n_pts = sum(enabled[k] for k in pts)
-        q = st.columns(4)
-        conf = {
-            "enabled": enabled,
-            "min_score": q[0].slider("Minimum score", 0, max(n_pts, 1), min(4, n_pts), help=tip("min_score")),
-            "stop_mode": q[1].selectbox("Stop placement", swing.STOP_MODES, help=tip("stop_mode")),
-            "t1_r": q[2].number_input("First target (R)", 0.5, 5.0, 1.5, 0.25, help=tip("t1_r")),
-            "t2_r": q[3].number_input("Second target (R, 0 = none)", 0.0, 10.0, 3.0, 0.5, help=tip("t2_r")),
-            "t1_fraction": q[0].slider("Sell at first target", 0.25, 1.0, 0.5, 0.25, format="%.2f", help=tip("t1_fraction")),
-            "max_hold": q[1].number_input("Max days in trade", 5, 250, 40, help=tip("max_hold")),
-            "flow": q[2].radio("Volume-flow line", ["OBV", "VPT"], horizontal=True, help=tip("flow")),
-        }
-        e = st.columns(4)
-        conf["trail"] = e[0].toggle("Trail under 20 EMA after T1", True, help=tip("trail"))
-        conf["exit_below_50"] = e[1].toggle("Exit on close below 50-day", True, help=tip("exit_below_50"))
-        conf["divergence_tighten"] = e[2].toggle("RSI divergence tightens stop", True, help=tip("divergence"))
-        conf["rsi_fade_partial"] = e[3].toggle("RSI over 70 takes partial", True, help=tip("rsi_fade"))
+@st.cache_data(ttl=12 * 3600, show_spinner=False)
+def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: float) -> dict:
+    syms_ = tuple(data.universe(universe))
+    ohlcv = data.download_ohlcv(syms_, period=years)
+    if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
+        raise ValueError("Couldn't download prices for the index right now.")
+    mkt = data.market_history(years)
+    if mkt.empty:
+        raise ValueError("Couldn't download SPY, which the market switch needs.")
+    return leader_dip.backtest(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
+                               cost_bps=cost_bps)
 
-    res = swing.backtest(hist, conf, cost, rf, market)
-    ts, trades = res["trade_stats"], res["trades"]
-    eq_s = res["equity"]
-    bh = hist["Close"].loc[eq_s.index[0]:] / hist["Close"].loc[eq_s.index[0]]
+
+def leader_dip_tab():
+    st.markdown(
+        "<div class='sf-note'><b>Leader Dip</b>, SharkFin's swing system, the one behind Top Performers and Trade setup. "
+        "It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and among the "
+        "30% strongest in the S&amp;P 500 over 6 months, with a limit order 3% under the signal close. It sells at the "
+        "next open once the 2-day RSI closes above 70, or after 10 days, with no stop loss, and only opens trades while "
+        "SPY is above its 200-day. Because it picks from the whole index and fires only a few times a year on any one "
+        "stock, it is tested as a portfolio of the index, not on the ticker above.</div>", unsafe_allow_html=True)
+    q = st.columns(4)
+    universe = q[0].selectbox("Stocks", ["S&P 500", "Nasdaq-100"], key="ld_uni")
+    years = q[1].segmented_control("History", ["5y", "10y"], default="10y", key="ld_years") or "10y"
+    cash_label = q[2].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=1, key="ld_cash",
+                                help=leader_dip.CASH_HELP)
+    slots = q[3].slider("Slots", 5, 20, leader_dip.SLOTS, key="ld_slots", help=tip("ld_slots"))
+    st.caption(f"Costs: {cost:g} bps on each buy and each sell (set at the top of the page; the research used 10).")
+    if not (st.button(f"Backtest Leader Dip on the {universe}", type="primary", key="ld_run")
+            or st.session_state.get("ld_ran")):
+        st.caption("Downloads daily prices for every stock in the index, so the first run takes a minute.")
+        return
+    st.session_state.ld_ran = True
+    try:
+        with st.spinner(f"Downloading the {universe} and replaying every day…"):
+            res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost))
+    except ValueError as e:
+        st.warning(str(e))
+        return
+    stt, spy, bsk = res["stats"], res["spy_stats"], res["basket_stats"]
+    end_val = START * (1 + stt["Total return"])
+    st.markdown(
+        f"<div class='sf-card {'buy' if stt['Sharpe'] > spy['Sharpe'] else ''}'><div class='t'>${end_val:,.0f} from "
+        f"${START:,} over {stt['Years']:.1f} years</div><div class='row'>That is {ui.fmt_pct(stt['Return per year'], 1)} "
+        f"a year with a worst drop of {ui.fmt_pct(stt['Worst drop'], 0)}. SPY did {ui.fmt_pct(spy['Return per year'], 1)} "
+        f"a year (worst drop {ui.fmt_pct(spy['Worst drop'], 0)}) and an equal-weight basket of the same "
+        f"{res['symbols']} stocks did {ui.fmt_pct(bsk['Return per year'], 1)}.</div></div>".replace("$", "&#36;"),
+        unsafe_allow_html=True)
     ui.metrics([
-        {"label": "Trades", "value": f"{ts['Trades']}", "help": tip("Trades")},
-        {"label": "Winning trades", "value": ui.fmt_pct(ts["Win rate"], 0), "help": tip("Win rate")},
-        {"label": "Avg result per trade", "value": f"{ts['Expectancy (R)']:+.2f}R" if np.isfinite(ts["Expectancy (R)"]) else None,
-         "help": tip("Expectancy (R)")},
-        {"label": "Profit factor", "value": ui.fmt_num(ts["Profit factor"]), "help": tip("Profit factor")},
-        {"label": "Return per year", "value": ui.fmt_pct(res["stats"].get("CAGR"), 1),
-         "help": "Compound annual return of the account, after costs."},
-        {"label": "Avg days held", "value": ui.fmt_num(ts["Avg bars held"], 1), "help": tip("Avg bars held")},
-    ], key="swm", cols=6)
-    st.caption("R = the amount risked on a trade (entry minus stop). +0.30R per trade means you made 30% of your risk "
-               "on average, across winners and losers.")
-    if trades.empty:
-        st.info("No trades triggered with these settings. Try lowering the minimum score or switching a must-pass rule off.")
-    else:
-        view = hist.iloc[-504:]
-        rules = res["rules"].reindex(view.index)
-        fig = go.Figure(go.Candlestick(x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"],
-                                       name=sym, increasing_line_color=ui.GREEN, decreasing_line_color=ui.RED))
-        for col, nm in (("ema20", "EMA 20"), ("sma50", "SMA 50"), ("sma200", "SMA 200")):
-            fig.add_scatter(x=view.index, y=rules[col], name=nm, line=dict(width=1.1, color=ui.MA_COLORS.get(nm)))
-        tv = trades[trades["Entry date"] >= view.index[0]]
-        fig.add_scatter(x=tv["Entry date"], y=tv["Entry"], mode="markers", name="Buy",
-                        marker=dict(symbol="triangle-up", size=11, color=ui.GREEN))
-        tc = tv.dropna(subset=["Exit date"])
-        fig.add_scatter(x=tc["Exit date"], y=tc["Avg exit"], mode="markers", name="Sell",
-                        marker=dict(symbol="triangle-down", size=11, color=np.where(tc["Return"] > 0, ui.BLUE, ui.RED)),
-                        text=tc["Exit reason"], hovertemplate="%{text}: $%{y:.2f}<extra></extra>")
-        fig.update_layout(title="Last 2 years: buys and sells", xaxis_rangeslider_visible=False, hovermode="x unified")
-        ui.plotly(fig, 460)
+        {"label": "Return per year", "value": ui.fmt_pct(stt["Return per year"], 1),
+         "delta": f"{(stt['Return per year'] - spy['Return per year']) * 100:+.1f} pts vs SPY"},
+        {"label": "Worst drop", "value": ui.fmt_pct(stt["Worst drop"], 0), "delta": f"SPY {ui.fmt_pct(spy['Worst drop'], 0)}",
+         "delta_color": "off", "delta_arrow": "off"},
+        {"label": "Sharpe ratio", "value": ui.fmt_num(stt["Sharpe"]), "delta": f"SPY {ui.fmt_num(spy['Sharpe'])}",
+         "delta_color": "off", "delta_arrow": "off", "help": tip("Sharpe")},
+        {"label": "Trades per year", "value": ui.fmt_num(stt["Trades per year"], 0),
+         "delta": f"avg {stt['Avg days held']:.1f} days" if np.isfinite(stt["Avg days held"]) else None,
+         "delta_color": "off", "delta_arrow": "off"},
+        {"label": "Winning trades", "value": ui.fmt_pct(stt["Win rate"], 0), "help": tip("Win rate")},
+        {"label": "Avg trade", "value": ui.fmt_pct(stt["Avg trade"], 2, True), "help": "Average return per trade after costs."},
+    ], key="ldm", cols=6)
 
-        fig = go.Figure([go.Scatter(x=eq_s.index, y=eq_s * START, name="Swing system", line=dict(color=ui.GREEN, width=2)),
-                         go.Scatter(x=bh.index, y=bh * START, name=f"Buy & hold {sym}", line=dict(color=ui.MUTED, width=1.4))])
-        fig.update_layout(title=f"What ${START:,} became", yaxis_type="log", yaxis_tickprefix="$", hovermode="x unified")
-        ui.plotly(fig, 320)
+    eq = res["equity"] * START
+    fig = go.Figure([go.Scatter(x=eq.index, y=eq, name=f"Leader Dip, idle cash in {cash_label.split(' while')[0]}",
+                                line=dict(color=ui.GREEN, width=2)),
+                     go.Scatter(x=eq.index, y=res["spy_equity"] * START, name="SPY", line=dict(color=ui.MUTED, width=1.4)),
+                     go.Scatter(x=eq.index, y=res["basket_equity"] * START, name=f"Equal-weight {universe}",
+                                line=dict(color=ui.BLUE, width=1.2, dash="dot"))])
+    fig.update_layout(title=f"What ${START:,} became", yaxis_type="log", yaxis_tickprefix="$", hovermode="x unified")
+    ui.plotly(fig, 380)
+    expo = res["exposure"].rolling(21).mean()
+    fig = go.Figure(go.Scatter(x=expo.index, y=expo * 100, fill="tozeroy", line=dict(color=ui.BLUE, width=1),
+                               name="Invested in trades"))
+    fig.update_layout(title="Share of the account in Leader Dip trades (1-month average)", yaxis=dict(ticksuffix="%", range=[0, 100]))
+    ui.plotly(fig, 220)
 
-        with st.expander(f"Every trade ({len(trades)})"):
-            show = trades.drop(columns=[k for k in swing.RULES if k in trades]).iloc[::-1]
-            st.dataframe(show, hide_index=True, width="stretch", height=320, column_config={
-                "Entry date": st.column_config.DateColumn("Bought", format="MMM D, YYYY"),
-                "Exit date": st.column_config.DateColumn("Sold", format="MMM D, YYYY"),
-                "Entry": st.column_config.NumberColumn(format="$%.2f"), "Stop": st.column_config.NumberColumn(format="$%.2f"),
-                "Risk ($)": st.column_config.NumberColumn(format="$%.2f", help=tip("risk_r")),
-                "Avg exit": st.column_config.NumberColumn(format="$%.2f"),
-                "Return": st.column_config.NumberColumn(format="percent"),
-                "R multiple": st.column_config.NumberColumn(format="%.2f", help=tip("R multiple")),
-                "Score": st.column_config.NumberColumn(help="How many point rules passed on the signal day."),
-            })
-        with st.expander("Which rules actually help"):
-            rep = swing.rule_report(trades)
-            if not rep.empty:
-                st.caption("Trades where each point rule was on, versus off.")
-                st.dataframe(rep, width="stretch", column_config={
-                    c: st.column_config.NumberColumn(format="percent" if "Win" in c else "%.2f") for c in rep.columns
-                    if "Trades" not in c})
-            if st.toggle("Test what each filter adds (re-runs the backtest several times)", help=tip("ablation")):
-                with st.spinner("Re-running variants…"):
-                    abl = swing.ablation(hist, conf, cost, rf, market)
-                st.dataframe(abl, width="stretch", column_config={
-                    "Win rate": st.column_config.NumberColumn(format="percent", help=tip("Win rate")),
-                    "Expectancy (R)": st.column_config.NumberColumn(format="%.2f", help=tip("Expectancy (R)")),
-                    "Profit factor": st.column_config.NumberColumn(format="%.2f", help=tip("Profit factor")),
-                    "Avg win": st.column_config.NumberColumn(format="percent"),
-                    "Avg loss": st.column_config.NumberColumn(format="percent"),
-                    "Avg bars held": st.column_config.NumberColumn(format="%.1f"),
-                    "CAGR": st.column_config.NumberColumn(format="percent"),
-                })
-                st.caption("Look for filters that raise the average result without cutting trades to a handful. "
-                           "Fewer than about 30 trades is too few to trust.")
+    tr = res["trades"]
+    mine = tr[tr["Symbol"] == sym]
+    if len(mine):
+        st.caption(f"{sym} was traded {len(mine)} times in this backtest; those trades are marked below.")
+        view = hist.loc[max(hist.index[0], res["equity"].index[0]):]
+        fig = go.Figure(go.Scatter(x=view.index, y=view["Close"], name=sym, line=dict(color="#c9d1dc", width=1.3)))
+        fig.add_scatter(x=mine["Bought"], y=mine["Buy price"], mode="markers", name="Buy",
+                        marker=dict(symbol="triangle-up", size=10, color=ui.GREEN))
+        done = mine.dropna(subset=["Sold"])
+        fig.add_scatter(x=done["Sold"], y=done["Sell price"], mode="markers", name="Sell", text=done["Why it sold"],
+                        hovertemplate="%{text}: $%{y:.2f}<extra></extra>",
+                        marker=dict(symbol="triangle-down", size=10, color=ui.RED))
+        fig.update_layout(title=f"{sym}: Leader Dip buys and sells", hovermode="x unified")
+        ui.plotly(fig, 360)
+    with st.expander(f"Every trade ({len(tr)})"):
+        st.dataframe(tr.iloc[::-1], hide_index=True, width="stretch", height=360, column_config={
+            "Signal date": st.column_config.DateColumn(format="MMM D, YYYY"),
+            "Bought": st.column_config.DateColumn(format="MMM D, YYYY"),
+            "Sold": st.column_config.DateColumn(format="MMM D, YYYY"),
+            "Buy price": st.column_config.NumberColumn(format="$%.2f"),
+            "Sell price": st.column_config.NumberColumn(format="$%.2f"),
+            "Return": st.column_config.NumberColumn(format="percent")})
+        by_year = tr.dropna(subset=["Sold"]).assign(Year=lambda d: pd.to_datetime(d["Bought"]).dt.year)
+        yr = res["equity"].resample("YE").last().pct_change()
+        yr.iloc[0] = res["equity"].resample("YE").last().iloc[0] / res["equity"].iloc[0] - 1
+        spy_yr = res["spy_equity"].resample("YE").last().pct_change()
+        spy_yr.iloc[0] = res["spy_equity"].resample("YE").last().iloc[0] / res["spy_equity"].iloc[0] - 1
+        ytab = pd.DataFrame({"Leader Dip": yr.values, "SPY": spy_yr.values}, index=yr.index.year)
+        ytab["Trades"] = by_year.groupby("Year").size().reindex(ytab.index).fillna(0).astype(int)
+        st.markdown("**Year by year**")
+        st.dataframe(ytab, width="stretch", column_config={
+            "Leader Dip": st.column_config.NumberColumn(format="percent"), "SPY": st.column_config.NumberColumn(format="percent")})
+    st.caption("This uses today's index members, so stocks that were dropped (often the big losers) are missing, which "
+               "flatters a strength-based system like this one. SharkFin's research ran it on the members of each date: "
+               "12.7% a year in 2013-26 with a 1.02 Sharpe, and the median of 576 nearby variants was 9.9% a year. "
+               "Expect results closer to that than to a perfect-hindsight run.")
+
+
+with tabs[2]:
+    leader_dip_tab()
 
 st.caption("A backtest on one stock is one path of history. Rules tuned until they look perfect on the past usually "
            "disappoint in the future, so check them on other stocks too.")

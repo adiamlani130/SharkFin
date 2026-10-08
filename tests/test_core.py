@@ -243,76 +243,139 @@ def test_rank_and_dedupe():
     assert "Nvidia" in ranked[0]["title"]
 
 
-# --------------------------------------------------------------------- swing / confluence
+# --------------------------------------------------------------------- leader dip / levels
 
-def _swing_ohlcv(n=1500, seed=3):
-    from tests.conftest import make_ohlcv
-    df = make_ohlcv(n, drift=0.0008, seed=seed)
-    rng = np.random.default_rng(seed + 1)
-    df["Open"] = df["Close"].shift(1).fillna(df["Close"]) * (1 + rng.normal(0, 0.003, n))
-    df["High"] = df[["High", "Open", "Close"]].max(axis=1)
-    df["Low"] = df[["Low", "Open", "Close"]].min(axis=1)
-    return df
-
-
-def test_swing_rules_have_no_lookahead():
-    from sharkfin import swing
-    df = _swing_ohlcv()
-    full = swing.rule_frame(df)
-    part = swing.rule_frame(df.iloc[:900])
-    cols = ["signal", "score", "stop", "resistance", "divergence"]
-    pd.testing.assert_frame_equal(full[cols].iloc[:900], part[cols], check_exact=False)
+def _panel(n=900, k=40, seed=5):
+    rng = np.random.default_rng(seed)
+    idx = pd.bdate_range("2021-01-04", periods=n)
+    mkt = rng.normal(0.0004, 0.01, n)
+    r = mkt[:, None] * rng.uniform(0.6, 1.4, k) + np.linspace(-0.0005, 0.001, k) + rng.normal(0, 0.018, (n, k))
+    c = 100 * np.exp(np.cumsum(r, 0))
+    o = np.vstack([c[:1], c[:-1]]) * np.exp(rng.normal(0, 0.01, (n, k)))
+    h = np.maximum(o, c) * (1 + np.abs(rng.normal(0, 0.008, (n, k))))
+    lo = np.minimum(o, c) * (1 - np.abs(rng.normal(0, 0.015, (n, k))))
+    cols = [f"S{i:02d}" for i in range(k)]
+    f = lambda a: pd.DataFrame(a, index=idx, columns=cols)
+    return {"Open": f(o), "High": f(h), "Low": f(lo), "Close": f(c)}, pd.Series(100 * np.exp(np.cumsum(mkt)), index=idx)
 
 
-def test_swing_simulator_fills_next_open_and_respects_stops():
-    from sharkfin import swing
-    df = _swing_ohlcv()
-    res = swing.backtest(df, cost_bps=0)
+def test_leader_dip_signals_have_no_lookahead():
+    from sharkfin import leader_dip
+    px, _ = _panel()
+    full = leader_dip.signal_frames(px["Close"])
+    part = leader_dip.signal_frames(px["Close"].iloc[:600])
+    pd.testing.assert_frame_equal(full["buy"].iloc[:600], part["buy"])
+    assert full["buy"].values.sum() > 20
+    lat = leader_dip.latest(px["Close"].iloc[:600])
+    assert lat["Signal"].equals(part["buy"].iloc[-1].reindex(lat.index))
+    assert np.allclose(lat["Limit"], lat["Price"] * 0.97)
+
+
+def test_leader_dip_backtest_fills_limits_and_exits():
+    from sharkfin import leader_dip
+    px, spy = _panel()
+    res = leader_dip.backtest(px, spy, cash="tbills", tbill_yields=pd.Series(0.0, index=spy.index), slots=1, cost_bps=0)
     tr = res["trades"]
-    assert len(tr) > 5
-    rules = res["rules"]
-    for _, t in tr.iterrows():
-        i = df.index.get_loc(t["Entry date"])
-        assert t["Entry"] == pytest.approx(df["Open"].iloc[i])
-        assert rules["signal"].iloc[i - 1]  # signal on the prior close
-        assert t["Stop"] < t["Entry"]
-    stops = tr[tr["Exit reason"] == "Stop"]
-    assert (stops["R multiple"] >= -1 - 1e-9).all()
-    ts = res["trade_stats"]
-    assert 0 <= ts["Win rate"] <= 1 and ts["Trades"] == (tr["Exit reason"] != "Open").sum()
-    # With no costs and rf = 0, equity compounds exactly the per-trade returns.
-    assert res["equity"].iloc[-1] == pytest.approx(float(np.prod(1 + tr["Return"])), rel=1e-9)
+    done = tr[tr["Why it sold"] != "Open"]
+    assert len(done) > 10
+    sig = leader_dip.signal_frames(px["Close"])
+    on = leader_dip.market_on(spy)
+    for _, t in done.iterrows():
+        d0, d1 = t["Signal date"], t["Bought"]
+        assert sig["buy"].loc[d0, t["Symbol"]] and on.loc[d0]
+        limit = px["Close"].loc[d0, t["Symbol"]] * 0.97
+        assert px["Low"].loc[d1, t["Symbol"]] <= limit + 1e-9
+        assert t["Buy price"] == pytest.approx(min(px["Open"].loc[d1, t["Symbol"]], limit))
+        assert t["Sell price"] == pytest.approx(px["Open"].loc[t["Sold"], t["Symbol"]])
+        assert t["Days held"] <= leader_dip.MAX_DAYS
+    # One slot, no costs, idle cash earning nothing: the account compounds the trades, except that each trade is
+    # sized from the prior close's account value, so a gap up at the exit open leaves a sliver in cash.
+    assert res["equity"].iloc[-1] == pytest.approx(float(np.prod(1 + tr["Return"])), rel=0.01)
+    st = res["stats"]
+    assert 0 <= st["Win rate"] <= 1 and st["Trades"] == len(done)
 
 
-def test_swing_params_change_trades_and_ablation():
-    from sharkfin import swing
-    df = _swing_ohlcv()
-    loose = swing.backtest(df, {"min_score": 0})["trade_stats"]["Trades"]
-    strict = swing.backtest(df, {"min_score": 6})["trade_stats"]["Trades"]
-    assert loose >= strict
-    abl = swing.ablation(df)
-    assert "Without: Stock uptrend" in abl.index and "Score ≥ 0" in abl.index
-    assert not swing.rule_report(swing.backtest(df)["trades"]).empty
+def test_leader_dip_idle_cash_choices():
+    from sharkfin import leader_dip
+    px, spy = _panel()
+    runs = {c: leader_dip.backtest(px, spy, cash=c, tbill_yields=pd.Series(0.02, index=spy.index))["equity"]
+            for c in ("tbills", "spy_trend", "spy")}
+    assert runs["tbills"].iloc[-1] != runs["spy"].iloc[-1]
+    assert runs["spy_trend"].iloc[-1] != runs["tbills"].iloc[-1]
 
 
-def test_trade_plan_levels_are_ordered():
-    from sharkfin import swing
-    df = _swing_ohlcv()
-    for end in (600, 900, 1200, 1500):
-        plan = swing.trade_plan(df.iloc[:end])
-        assert plan["status"]
-        if np.isfinite(plan["entry"]) and np.isfinite(plan["stop"]):
-            assert plan["stop"] < plan["entry"] < plan["t1"] < plan["t2"]
-        assert all(z["low"] <= z["high"] for z in plan["zones"])
-    assert backtest.run(df, "Confluence Pullback")["stats"]["Trades"] >= 0
+def test_regime_band_and_switch():
+    from sharkfin import leader_dip
+    idx = pd.bdate_range("2020-01-01", periods=600)
+    up = pd.Series(np.linspace(100, 200, 600), index=idx)
+    r = leader_dip.regime(up)
+    assert r["leader_dip_on"] and r["band_on"] and r["ten_month_on"] and r["idle_cash"] == "SPY"
+    down = up.copy()
+    down.iloc[-30:] = np.linspace(190, 150, 30)
+    r = leader_dip.regime(down)
+    assert not r["leader_dip_on"] and r["band_on"] is False and r["idle_cash"] == "T-bills"
+    # Inside the 2% band the banded switch keeps its last state.
+    sma = pd.Series(100.0, index=idx[:5])
+    assert list(leader_dip._band(pd.Series([103, 101, 99, 97, 99.5], index=idx[:5]), sma, 0.02)) == [True, True, True, False, False]
 
 
-def test_rsi_divergence_detects_lower_momentum_high():
-    from sharkfin import swing
+def test_leader_dip_follow_up():
+    from sharkfin import leader_dip
+    idx = pd.bdate_range("2026-01-05", periods=15)
+    c = pd.Series([100, 96, 95, 97, 99, 101, 103, 104, 103, 102, 101, 100, 99, 98, 97], index=idx, dtype=float)
+    o, lo = c.shift(1).fillna(100), c * 0.98
+    lo.iloc[2] = 92.0  # reaches the 93.12 limit the day after the signal
+    px = {"Open": pd.DataFrame({"AAA": o, "BBB": o}), "Low": pd.DataFrame({"AAA": lo, "BBB": c}),
+          "Close": pd.DataFrame({"AAA": c, "BBB": c})}
+    log = pd.DataFrame({"Date": [f"{idx[1]:%Y-%m-%d}"] * 2, "Symbol": ["AAA", "BBB"], "Close": [96.0, 96.0],
+                        "Limit": [93.12, 93.12]})
+    fu = leader_dip.follow_up(log, px).set_index("Symbol")
+    assert fu.loc["AAA", "Filled"] and fu.loc["AAA", "Fill price"] == pytest.approx(min(o.iloc[2], 93.12))
+    assert fu.loc["AAA", "Status"] in ("Closed", "Open", "Sell at the next open")
+    assert fu.loc["BBB", "Filled"] is False or fu.loc["BBB", "Filled"] == False  # noqa: E712
+
+
+def test_levels_zones_and_divergence(ohlcv):
+    from sharkfin import levels
+    zones = levels.sr_zones(ohlcv)
+    assert zones and all(z["low"] <= z["high"] for z in zones)
+    res, sup = levels.nearest_levels(ohlcv, zones)
+    price = ohlcv["Close"].iloc[-1]
+    assert (not np.isfinite(res) or res > price) and (not np.isfinite(sup) or sup < price)
     high = pd.Series([10, 11, 12, 13, 12, 11, 11.5, 12, 12.5, 13.5], dtype=float)
     rsi = pd.Series([50, 60, 70, 75, 65, 55, 58, 62, 64, 68], dtype=float)
-    div = swing.rsi_bearish_divergence(high, rsi, window=8)
+    div = levels.rsi_bearish_divergence(high, rsi, window=8)
     assert div.iloc[-1] and not div.iloc[:-1].any()
+
+
+# --------------------------------------------------------------------- ratings
+
+def test_sector_relative_ratings(price_panel):
+    from sharkfin import ratings
+    sectors = pd.Series(["A"] * 20 + ["B"] * 20, index=price_panel.columns)
+    info = pd.DataFrame({"trailingEps": np.linspace(-1, 8, 40), "earningsGrowth": 0.1,
+                         "currentPrice": price_panel.iloc[-1].values, "averageVolume": 1e6}, index=price_panel.columns)
+    rat = ratings.ratings(price_panel, sectors, info, 0.04)
+    for k in ("RV", "RT", "RS", "CI", "VST"):
+        assert rat[k].between(0, 2).all(), k
+    # Ranked within each sector: every sector's ranks span the same range.
+    assert rat.groupby(sectors)["RT"].max().round(6).nunique() == 1
+    assert (rat.loc[info["trailingEps"] <= 0, "RV_raw"] == 0).all()
+    # RT follows relative strength: the planted winners (higher columns) trend better.
+    assert np.corrcoef(rat["rt_raw"], np.arange(40))[0, 1] > 0.3
+    top = ratings.vst_list(rat, pd.Series(np.linspace(-0.1, 0.1, 40), index=price_panel.columns), n=5)
+    assert len(top) == 5 and top["VST"].is_monotonic_decreasing
+
+
+def test_sector_context(price_panel):
+    from sharkfin import ratings
+    etfs = price_panel.iloc[:, :11].copy()
+    etfs.columns = list(ratings.GICS_OF_ETF)
+    sec = pd.Series(["Information Technology"] * 10 + ["Energy"] * 30, index=price_panel.columns)
+    ctx = ratings.sector_context("S00", price_panel["S00"], "Technology", etfs, price_panel, sec)
+    assert ctx["etf"] == "XLK" and 1 <= ctx["rank"] <= 11 and ctx["breadth_n"] == 10
+    assert ctx["vs_sector"] == pytest.approx(ctx["stock_6m"] - ctx["sector_6m"])
+    assert ratings.sector_context("S00", price_panel["S00"], "Unknown", etfs) == {}
 
 
 # --------------------------------------------------------------------- catalysts
@@ -328,6 +391,24 @@ def test_earnings_and_insider_summaries():
     ins = catalysts.insider_summary(ad["insider_transactions"], now=pd.Timestamp("2026-09-30"))
     assert ins["buys"] == 2 and ins["buyers"] == 2 and ins["cluster"] and ins["sells"] == 1
     assert catalysts.revision_balance(ad["eps_revisions"]) == pytest.approx(10 / 12)
+
+
+def test_earnings_beat_flag():
+    from sharkfin import catalysts
+    from tests import fakes
+    ed = fakes.analyst_data("AAPL")["earnings_dates"]  # last report Jul 20 2026, +10.5% surprise
+    idx = pd.bdate_range("2026-06-01", "2026-09-30")
+    flat = pd.Series(100.0, index=idx)
+    jump = flat.copy()
+    jump[jump.index >= "2026-07-21"] = 107.0  # +7% on the first trading day after the report
+    hit = catalysts.earnings_beat_flag(ed, jump.loc[:"2026-08-20"])
+    assert hit["flag"] and hit["active"] and hit["jump"] == pytest.approx(0.07) and hit["surprise"] == pytest.approx(0.105)
+    # The same jump is no flag when the whole market rose with it.
+    assert not catalysts.earnings_beat_flag(ed, jump.loc[:"2026-08-20"], jump)["flag"]
+    assert not catalysts.earnings_beat_flag(ed, flat)["flag"]
+    stale = catalysts.earnings_beat_flag(ed, jump)  # ~50 trading days later: still inside the window
+    late = catalysts.earnings_beat_flag(ed, pd.concat([jump, pd.Series(107.0, index=pd.bdate_range("2026-10-01", "2026-12-31"))]))
+    assert stale["active"] and late["flag"] and not late["active"]
 
 
 def test_filing_change_finds_new_risk_language():
