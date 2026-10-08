@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
+from sharkfin import data
 from tests import fakes
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +28,7 @@ runpy.run_path(r"{path}", run_name="__main__")
 @pytest.fixture(autouse=True)
 def offline(monkeypatch, tmp_path):
     fakes.install(monkeypatch)
+    data._cache.clear()
     monkeypatch.chdir(tmp_path)  # keep saved JSON out of the repo
     monkeypatch.syspath_prepend(str(ROOT))
 
@@ -59,11 +61,59 @@ def _ok(at):
     assert not at.error, [e.value for e in at.error]
 
 
-def test_scanner_leader_dip_and_core_tabs():
+def _scanned(view=None):
     at = _page("scanner")
     at.button[0].click().run()
+    if view:
+        at.session_state["tp_view"] = view
+        at.run()
+    return at
+
+
+def test_scanner_every_tab_renders():
+    at = _scanned()
+    for view in ("Rankings", "Swing setups", "Core longs", "Could run", "Sector VST list", "Does the ranking work?"):
+        at.session_state["tp_view"] = view
+        at.run()
+        _ok(at)
+
+
+def test_scanner_weights_rescore_without_downloading_again(monkeypatch):
+    calls = []
+    real = data.download_prices
+    monkeypatch.setattr(data, "download_prices", lambda *a, **k: calls.append(a) or real(*a, **k))
+    at = _scanned()
+    first = at.dataframe[0].value.index.tolist()
+    n = len(calls)
+    at.slider(key="tw_Momentum").set_value(0.5).run()
+    _ok(at)
+    assert len(calls) == n
+    assert at.dataframe[0].value.index.tolist() != first
+
+
+def test_scanner_keeps_last_results_when_settings_change():
+    at = _scanned()
+    at.selectbox[0].set_value("Dow 30").run()
+    _ok(at)
+    assert any("Showing the last scan (S&P 500 with fundamentals)" in i.value for i in at.info)
+    assert len(at.dataframe)
+
+
+def test_scanner_stops_a_scan_whose_settings_changed_midway():
+    at = _page("scanner")
+    at.session_state["scan_req"] = ("Nasdaq-100", ("AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"), True)
+    at.run()
+    _ok(at)
+    assert any("so that scan stopped" in i.value for i in at.info)
+    assert not len(at.dataframe)
+
+
+def test_scanner_leader_dip_and_core_tabs():
+    at = _scanned("Core longs")
     _ok(at)
     assert any("Core score" in str(df.value.columns.tolist()) for df in at.dataframe)
+    at.session_state["tp_view"] = "Swing setups"
+    at.run()
     assert any("Signal log" in e.label for e in at.expander)
 
 
@@ -115,8 +165,7 @@ def test_scanner_shows_signals_and_logs_them(monkeypatch, tmp_path):
         out.loc[out.index[:2], "Signal"] = True  # make sure the table and the log have rows
         return out
     monkeypatch.setattr(leader_dip, "latest", forced)
-    at = _page("scanner")
-    at.button[0].click().run()
+    at = _scanned("Swing setups")
     _ok(at)
     assert any("Limit" in str(df.value.columns.tolist()) for df in at.dataframe)
     log = tmp_path / ".sharkfin" / "leader_dip_log.json"
@@ -131,18 +180,22 @@ def test_news_flags_big_beats():
 
 
 def test_scanner_could_run_and_ranking_check():
-    at = _page("scanner")
-    at.button[0].click().run()
+    at = _scanned()
+    assert any("Earnings" in str(df.value.columns.tolist()) for df in at.dataframe)
+    at.session_state["tp_view"] = "Could run"
+    at.run()
     _ok(at)
     assert any("Top-5% winner" in str(df.value.columns.tolist()) for df in at.dataframe)
+    at.session_state["tp_view"] = "Does the ranking work?"
+    at.run()
+    _ok(at)
     assert any("Right direction" in str(df.value.columns.tolist()) for df in at.dataframe)
     assert any(m.label == "Months ahead" for m in at.metric)
-    assert any("Earnings" in str(df.value.columns.tolist()) for df in at.dataframe)
 
 
 def test_swing_choice_follows_the_user_across_pages(tmp_path):
-    at = _page("scanner")
-    at.button[0].click().run()
+    at = _scanned("Swing setups")
+    at.session_state["tp_view"] = "Swing setups"  # AppTest doesn't send the open tab back with other widgets
     at.selectbox(key="swing_pick_tp").set_value("Volume breakout").run()
     _ok(at)
     assert any("Buys</b> at the next open" in md.value for md in at.markdown)

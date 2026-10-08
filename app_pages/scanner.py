@@ -19,8 +19,8 @@ c1, c2, c3 = st.columns([2, 2, 2], vertical_alignment="bottom")
 uni_name = c1.selectbox("Universe", ["S&P 500", "Nasdaq-100", "Dow 30", "S&P 500 + Nasdaq-100", "My watchlist + portfolio"])
 use_fund = c2.toggle("Include fundamentals and earnings", value=True,
                      help="Adds the Earnings, Value, Quality, Growth and Analysts themes, and is needed for Core longs. "
-                          "Company data and earnings history for every stock are cached for 12 hours, so the first scan "
-                          "is slower.")
+                          "Company data is kept for 12 hours and earnings history until each company reports again, so "
+                          "only the first scan is slow.")
 top_n = c3.slider("Show top / bottom", 5, 25, 10)
 
 with st.expander("What counts, and how much"):
@@ -41,28 +41,68 @@ def get_universe(name):
     return data.universe(name)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def scan(symbols: tuple, with_fund: bool, weights: tuple):
+@data.ttl_cache(1800)
+def scan_data(symbols: tuple, with_fund: bool) -> dict | None:
+    """Everything a scan needs except the weights, so moving a weight slider only re-scores."""
     px = data.download_prices(symbols, period="2y")
     px = px.dropna(axis=1, thresh=int(len(px) * 0.8)) if len(px) else px
     if px.empty or px.shape[1] < 5:
-        return None, None, None
-    pf = factors.price_factor_frame(px)
-    sectors, ff, ef, names, info_df = None, None, None, pd.Series(dtype=object), pd.DataFrame()
+        return None
+    out = {"px": px, "pf": factors.price_factor_frame(px), "ff": None, "ef": None, "sectors": None,
+           "names": pd.Series(dtype=object), "info": pd.DataFrame()}
     tab = data.sp500_table().set_index("Symbol")
     if with_fund:
-        info_df = data.infos(tuple(px.columns))
-        ff = factors.fundamental_factor_frame(info_df)
-        ef = factors.earnings_factor_frame(data.earnings_histories(tuple(px.columns)))
-        sectors = info_df["sector"] if "sector" in info_df else None
-        names = info_df["shortName"] if "shortName" in info_df else names
-    if sectors is None or sectors.isna().all():
-        sectors = tab["Sector"].reindex(px.columns) if "Sector" in tab else None
-    scores = factors.composite_scores(pf, ff, sectors, dict(weights), earn_f=ef)
-    scores["Sector"] = sectors.reindex(scores.index) if sectors is not None else None
-    scores["Name"] = names.reindex(scores.index) if len(names) else tab["Name"].reindex(scores.index)
-    scores["Price"] = px.iloc[-1].reindex(scores.index)
-    return scores.dropna(subset=["Composite"]).sort_values("Composite", ascending=False), px, info_df
+        info_df = data.infos(symbols).reindex(px.columns)
+        out.update(info=info_df, ff=factors.fundamental_factor_frame(info_df),
+                   ef=factors.earnings_factor_frame({s: e for s, e in data.earnings_histories(symbols).items()
+                                                     if s in px.columns}),
+                   sectors=info_df["sector"] if "sector" in info_df else None,
+                   names=info_df["shortName"] if "shortName" in info_df else out["names"])
+    if out["sectors"] is None or out["sectors"].isna().all():
+        out["sectors"] = tab["Sector"].reindex(px.columns) if "Sector" in tab else None
+    if not len(out["names"]):
+        out["names"] = tab["Name"].reindex(px.columns) if "Name" in tab else out["names"]
+    return out
+
+
+def load_scan(symbols: tuple, with_fund: bool, slot) -> dict | None:
+    """Download what the scan needs with a progress bar, then build it. Each download is cached as soon as it
+    finishes, so a scan interrupted by a settings change resumes where it stopped."""
+    if scan_data.cached(symbols, with_fund):
+        return scan_data(symbols, with_fund)
+    jobs = [(data.download_prices, (symbols,), {"period": "2y"})]
+    if with_fund:
+        need_info = not getattr(data.infos, "cached", lambda *a: False)(symbols)
+        need_earn = not getattr(data.earnings_histories, "cached", lambda *a: False)(symbols)
+        for s in symbols:  # interleaved, so the slow earnings pages don't wait behind the company data
+            jobs += [(data.earnings_history, (s,))] * need_earn + [(data.info, (s,))] * need_info
+    with slot.container(), st.status(f"Scanning {len(symbols)} stocks…", expanded=True) as box:
+        what = "prices, company data and earnings history" if with_fund else "prices"
+        bar = st.progress(0.0, text=f"Downloading {what}…")
+        st.caption("Earnings history is the slow part the first time (Yahoo serves it one stock at a time). It is "
+                   "saved until each company reports again, so later scans are much quicker.")
+
+        def tick(done, total):
+            bar.progress(done / total, text=f"Downloading {what}: {done:,} of {total:,} done")
+
+        data.prefetch(jobs, progress=tick)
+        box.update(label="Scoring…")
+        out = scan_data(symbols, with_fund)
+        box.update(label=f"Scanned {out['px'].shape[1]} stocks" if out else "Scan failed",
+                   state="complete" if out else "error", expanded=False)
+    return out
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def scan(symbols: tuple, with_fund: bool, weights: tuple):
+    d = scan_data(symbols, with_fund)
+    if d is None:
+        return None, None, None
+    scores = factors.composite_scores(d["pf"], d["ff"], d["sectors"], dict(weights), earn_f=d["ef"])
+    scores["Sector"] = d["sectors"].reindex(scores.index) if d["sectors"] is not None else None
+    scores["Name"] = d["names"].reindex(scores.index)
+    scores["Price"] = d["px"].iloc[-1].reindex(scores.index)
+    return scores.dropna(subset=["Composite"]).sort_values("Composite", ascending=False), d["px"], d["info"]
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
@@ -103,16 +143,35 @@ if len(syms) < 5:
     st.info("Add at least 5 stocks to your watchlist or portfolio to scan them, or pick an index.")
     st.stop()
 
-if not (st.button(f"Scan {len(syms)} stocks", type="primary", width="stretch") or st.session_state.get("scan_ran")):
+# The scan runs for the settings that were current when Scan was pressed. Weight changes only re-score, so they
+# apply at once; a new universe or the fundamentals toggle needs another press, because it means new downloads.
+want = (uni_name, tuple(syms), bool(use_fund))
+if st.button(f"Scan {len(syms)} stocks", type="primary", width="stretch"):
+    st.session_state.scan_req = want
+req = st.session_state.get("scan_req")
+if req is None:
     st.stop()
-st.session_state.scan_ran = True
-with st.status("Scanning…", expanded=False) as s:
-    scores, px, info_df = scan(tuple(syms), use_fund, tuple(sorted(tw.items())))
-    s.update(label=f"Scanned {len(scores)} stocks" if scores is not None else "Scan failed",
-             state="complete" if scores is not None else "error")
-if scores is None:
+note = st.empty()  # one fixed spot for the progress or a settings notice, so the tabs below never shift
+req_name, req_syms, req_fund = req
+if req != want:
+    what = f"{req_name} {'with' if req_fund else 'without'} fundamentals"
+    if not scan_data.cached(req_syms, req_fund):
+        note.info(f"You changed the settings while {what} was scanning, so that scan stopped. Press **Scan** to scan "
+                "with the new settings. Downloads that already finished are kept.")
+        st.stop()
+    note.info(f"Showing the last scan ({what}). Press **Scan** to update it to the new settings.")
+if load_scan(req_syms, req_fund, note) is None:
     st.error("Couldn't download prices for this universe right now. Try again in a minute.")
     st.stop()
+use_fund = req_fund
+for theme, w in factors.DEFAULT_THEME_WEIGHTS.items():
+    if theme in factors.FUNDAMENTAL_FACTORS or theme in factors.EARNINGS_FACTORS:
+        if use_fund:
+            tw.setdefault(theme, st.session_state.get(f"tw_{theme}", w))
+        else:
+            tw.pop(theme, None)
+scores, px, info_df = scan(req_syms, use_fund, tuple(sorted(tw.items())))
+syms = list(req_syms)
 
 themes = [t for t in factors.DEFAULT_THEME_WEIGHTS if t in scores.columns]
 top_n = min(top_n, len(scores) // 2)
@@ -121,7 +180,9 @@ if use_fund and n_fund < 0.8 * len(scores):
     st.warning(f"Yahoo only returned company data for {n_fund} of {len(scores)} stocks (it rate-limits bursts of requests), "
                "so fundamental themes are missing for the rest. Re-run the scan in a few minutes to fill them in.")
 
-tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Could run", "Sector VST list", "Does the ranking work?"])
+# Only the open tab runs, so the slower ones (the replay, the swing scan) cost nothing until opened.
+tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Could run", "Sector VST list", "Does the ranking work?"],
+               key="tp_view", on_change="rerun")
 
 
 def card(row, sym, kind):
@@ -351,72 +412,77 @@ def vst_tab():
 
 
 with tabs[0]:
-    l, r = st.columns(2)
-    with l:
-        st.subheader(f"Top {top_n}", help="The strongest overall profile right now.")
-        for sym_, row in scores.head(top_n).iterrows():
-            card(row, sym_, "buy")
-    with r:
-        st.subheader(f"Bottom {top_n}", help="The weakest overall profile: the stocks the factors say to avoid.")
-        for sym_, row in scores.tail(top_n).iloc[::-1].iterrows():
-            card(row, sym_, "sell")
-    st.subheader("Full ranking", help="Theme columns are standard deviations above (+) or below (−) the stock's sector "
-                                      "average. Hover a column name for what it measures.")
-    show = ["Name", "Sector", "Price", "Composite", "Percentile", *themes, "ret_1m", "mom_12_1", "volatility"]
-    show = [c for c in show if c in scores.columns]
-    st.dataframe(scores[show], width="stretch", height=460, column_config={
-        "Price": st.column_config.NumberColumn(format="$%.2f"),
-        "Composite": st.column_config.NumberColumn("Score", format="%+.2f", help="Weighted blend of the theme scores."),
-        "Percentile": st.column_config.ProgressColumn("Rank", min_value=0, max_value=100, format="%.0f",
-                                                      help="Share of the list this stock beats."),
-        "ret_1m": st.column_config.NumberColumn("1M", format="percent"),
-        "mom_12_1": st.column_config.NumberColumn("12M (ex last month)", format="percent"),
-        "volatility": st.column_config.NumberColumn("Volatility", format="percent"),
-        **{t: st.column_config.NumberColumn(format="%+.2f", help=factors.THEME_HELP[t]) for t in themes},
-    })
-    st.download_button("Download ranking (CSV)", scores[show].to_csv().encode(), "sharkfin_scan.csv", "text/csv")
+    if tabs[0].open is not False:
+        l, r = st.columns(2)
+        with l:
+            st.subheader(f"Top {top_n}", help="The strongest overall profile right now.")
+            for sym_, row in scores.head(top_n).iterrows():
+                card(row, sym_, "buy")
+        with r:
+            st.subheader(f"Bottom {top_n}", help="The weakest overall profile: the stocks the factors say to avoid.")
+            for sym_, row in scores.tail(top_n).iloc[::-1].iterrows():
+                card(row, sym_, "sell")
+        st.subheader("Full ranking", help="Theme columns are standard deviations above (+) or below (−) the stock's sector "
+                                          "average. Hover a column name for what it measures.")
+        show = ["Name", "Sector", "Price", "Composite", "Percentile", *themes, "ret_1m", "mom_12_1", "volatility"]
+        show = [c for c in show if c in scores.columns]
+        st.dataframe(scores[show], width="stretch", height=460, column_config={
+            "Price": st.column_config.NumberColumn(format="$%.2f"),
+            "Composite": st.column_config.NumberColumn("Score", format="%+.2f", help="Weighted blend of the theme scores."),
+            "Percentile": st.column_config.ProgressColumn("Rank", min_value=0, max_value=100, format="%.0f",
+                                                          help="Share of the list this stock beats."),
+            "ret_1m": st.column_config.NumberColumn("1M", format="percent"),
+            "mom_12_1": st.column_config.NumberColumn("12M (ex last month)", format="percent"),
+            "volatility": st.column_config.NumberColumn("Volatility", format="percent"),
+            **{t: st.column_config.NumberColumn(format="%+.2f", help=factors.THEME_HELP[t]) for t in themes},
+        })
+        st.download_button("Download ranking (CSV)", scores[show].to_csv().encode(), "sharkfin_scan.csv", "text/csv")
 
 with tabs[1]:
-    swing_tab()
+    if tabs[1].open is not False:
+        swing_tab()
 
 with tabs[2]:
-    st.markdown(f"<div class='sf-note'>{catalysts.CORE_LONG_INTRO}</div>", unsafe_allow_html=True)
-    if not use_fund:
-        st.info("Turn on **Include fundamentals and analyst data** above to build the core-long list.")
-    else:
-        core, funnel = catalysts.core_long_screen(scores, info_df)
-        with st.expander("The rules, and how many stocks pass each one", expanded=core.empty):
-            fdf = pd.DataFrame(funnel)
-            st.dataframe(fdf, hide_index=True, width="stretch", column_config={
-                "Rule": st.column_config.TextColumn(width="medium"),
-                "Still in": st.column_config.ProgressColumn(min_value=0, max_value=int(fdf["Still in"].max() or 1), format="%d"),
-                "Why": st.column_config.TextColumn(width="large")})
-        if core.empty:
-            st.info("No stock passes every rule in this universe right now. The table above shows which rule removed "
-                    "the most; in a falling market the trend rules can screen out almost everything, which is the point.")
+    if tabs[2].open is not False:
+        st.markdown(f"<div class='sf-note'>{catalysts.CORE_LONG_INTRO}</div>", unsafe_allow_html=True)
+        if not use_fund:
+            st.info("Turn on **Include fundamentals and analyst data** above to build the core-long list.")
         else:
-            cols = [c for c in ("Name", "Sector", "Price", "Core score", "mom_12_1", "fip", "Value", "volatility",
-                                "roe", "fcf_yield", "earnings_yield") if c in core]
-            st.dataframe(core[cols], width="stretch", column_config={
-                "Price": st.column_config.NumberColumn(format="$%.2f"),
-                "Core score": st.column_config.NumberColumn(format="%+.2f", help=catalysts.CORE_SCORE_HELP),
-                "Value": st.column_config.NumberColumn("Value vs sector", format="%+.2f", help=factors.THEME_HELP["Value"]),
-                "fip": st.column_config.ProgressColumn("Steady climb", min_value=-0.2, max_value=0.2, format="%+.2f",
-                                                       help="Share of up days minus share of down days over the past year (skipping the last month)."),
-                "roe": st.column_config.NumberColumn("ROE", format="percent"),
-                "fcf_yield": st.column_config.NumberColumn("FCF yield", format="percent"),
-                "earnings_yield": st.column_config.NumberColumn("Earnings yield", format="percent"),
-                "mom_12_1": st.column_config.NumberColumn("12M return", format="percent"),
-                "volatility": st.column_config.NumberColumn("Volatility", format="percent"),
-            })
-            st.caption("For a passive core, hold 15-30 of these across different sectors and re-check quarterly rather "
-                       "than concentrating. Check each one on Research & Valuation → Trade setup (long-term checklist).")
+            core, funnel = catalysts.core_long_screen(scores, info_df)
+            with st.expander("The rules, and how many stocks pass each one", expanded=core.empty):
+                fdf = pd.DataFrame(funnel)
+                st.dataframe(fdf, hide_index=True, width="stretch", column_config={
+                    "Rule": st.column_config.TextColumn(width="medium"),
+                    "Still in": st.column_config.ProgressColumn(min_value=0, max_value=int(fdf["Still in"].max() or 1), format="%d"),
+                    "Why": st.column_config.TextColumn(width="large")})
+            if core.empty:
+                st.info("No stock passes every rule in this universe right now. The table above shows which rule removed "
+                        "the most; in a falling market the trend rules can screen out almost everything, which is the point.")
+            else:
+                cols = [c for c in ("Name", "Sector", "Price", "Core score", "mom_12_1", "fip", "Value", "volatility",
+                                    "roe", "fcf_yield", "earnings_yield") if c in core]
+                st.dataframe(core[cols], width="stretch", column_config={
+                    "Price": st.column_config.NumberColumn(format="$%.2f"),
+                    "Core score": st.column_config.NumberColumn(format="%+.2f", help=catalysts.CORE_SCORE_HELP),
+                    "Value": st.column_config.NumberColumn("Value vs sector", format="%+.2f", help=factors.THEME_HELP["Value"]),
+                    "fip": st.column_config.ProgressColumn("Steady climb", min_value=-0.2, max_value=0.2, format="%+.2f",
+                                                           help="Share of up days minus share of down days over the past year (skipping the last month)."),
+                    "roe": st.column_config.NumberColumn("ROE", format="percent"),
+                    "fcf_yield": st.column_config.NumberColumn("FCF yield", format="percent"),
+                    "earnings_yield": st.column_config.NumberColumn("Earnings yield", format="percent"),
+                    "mom_12_1": st.column_config.NumberColumn("12M return", format="percent"),
+                    "volatility": st.column_config.NumberColumn("Volatility", format="percent"),
+                })
+                st.caption("For a passive core, hold 15-30 of these across different sectors and re-check quarterly rather "
+                           "than concentrating. Check each one on Research & Valuation → Trade setup (long-term checklist).")
 
 with tabs[3]:
-    could_run_tab()
+    if tabs[3].open is not False:
+        could_run_tab()
 
 with tabs[4]:
-    vst_tab()
+    if tabs[4].open is not False:
+        vst_tab()
 
 RESEARCH_TAKEAWAYS = [
     "<b>No ranking built from public data reliably picks S&amp;P 500 winners.</b> Over 2000-2026 we tested 50 signals "
@@ -437,73 +503,74 @@ RESEARCH_TAKEAWAYS = [
 ]
 
 with tabs[5]:
-    st.markdown("<div class='sf-note'>A ranking is only useful if the stocks at the top go on to do better. This tab "
-                "has two checks: a <b>24-year test</b> on the stocks that were actually in the S&amp;P 500 at each "
-                "date, and a <b>replay of the last ~4 years</b> on this list with your weights.</div>",
-                unsafe_allow_html=True)
-    st.subheader("What 24 years of testing found",
-                 help="Point-in-time S&P 500 members, 2000-2026: every month, buy the top 20% by score, hold a month, "
-                      "compare with the equal-weight average of the members. Earnings history starts in 2002 and analyst "
-                      "history in 2012; fundamental themes were tested with earnings yield, dividend yield and earnings "
-                      "stability, the parts with history.")
-    st.markdown("<div class='sf-card'>" + "".join(f"<div class='row'>{t}</div>" for t in RESEARCH_TAKEAWAYS) + "</div>",
-                unsafe_allow_html=True)
-    st.dataframe(factors.RESEARCH, hide_index=True, width="stretch", column_config={
-        "Ranking": st.column_config.TextColumn(width="large"),
-        "Top 20% vs average": st.column_config.NumberColumn(format="percent",
-                                                            help="Yearly return of the top 20% minus the average member."),
-        "Right direction": st.column_config.NumberColumn(format="percent",
-                                                         help="Share of months where higher scores went on to do better.")})
+    if tabs[5].open is not False:
+        st.markdown("<div class='sf-note'>A ranking is only useful if the stocks at the top go on to do better. This tab "
+                    "has two checks: a <b>24-year test</b> on the stocks that were actually in the S&amp;P 500 at each "
+                    "date, and a <b>replay of the last ~4 years</b> on this list with your weights.</div>",
+                    unsafe_allow_html=True)
+        st.subheader("What 24 years of testing found",
+                     help="Point-in-time S&P 500 members, 2000-2026: every month, buy the top 20% by score, hold a month, "
+                          "compare with the equal-weight average of the members. Earnings history starts in 2002 and analyst "
+                          "history in 2012; fundamental themes were tested with earnings yield, dividend yield and earnings "
+                          "stability, the parts with history.")
+        st.markdown("<div class='sf-card'>" + "".join(f"<div class='row'>{t}</div>" for t in RESEARCH_TAKEAWAYS) + "</div>",
+                    unsafe_allow_html=True)
+        st.dataframe(factors.RESEARCH, hide_index=True, width="stretch", column_config={
+            "Ranking": st.column_config.TextColumn(width="large"),
+            "Top 20% vs average": st.column_config.NumberColumn(format="percent",
+                                                                help="Yearly return of the top 20% minus the average member."),
+            "Right direction": st.column_config.NumberColumn(format="percent",
+                                                             help="Share of months where higher scores went on to do better.")})
 
-    st.subheader("Replay: the last ~4 years with your weights")
-    with_earn = bool(use_fund and tw.get("Earnings", 0) > 0)
-    replayed = [t for t in factors.REPLAYABLE if tw.get(t, 0) > 0 and (with_earn or t in factors.PRICE_FACTORS)]
-    st.caption("Every month, buy the top 20% of this list using only what was known then, hold a month, pay trading "
-               f"costs, repeat. It can rebuild {', '.join(replayed) if replayed else 'no theme'} from history; Value, "
-               "Quality, Growth and Analysts are left out because free data doesn't keep their past values.")
-    with st.spinner("Replaying the ranking month by month…"):
-        try:
-            bt = factor_backtest(tuple(px.columns), tuple(sorted(tw.items())), with_earn)
-        except ValueError as e:
-            st.warning(str(e))
-            bt = None
-    if bt:
-        s_stats = risk.summary(bt["strategy"], bt["benchmark"])
-        b_stats = risk.summary(bt["benchmark"])
-        edge = s_stats["CAGR"] - b_stats["CAGR"]
-        verdict = ("The top of the ranking beat the average stock" if edge > 0.01 else
-                   "The top of the ranking did about the same as the average stock" if edge > -0.01 else
-                   "The top of the ranking lagged the average stock")
-        st.markdown(f"<div class='sf-card'>{ui.pill('Ahead' if edge > 0.01 else 'Even' if edge > -0.01 else 'Behind', 'pos' if edge > 0.01 else 'neu' if edge > -0.01 else 'neg')}"
-                    f"<span class='sf-note'>{verdict}: <b>{s_stats['CAGR']:.1%}</b> a year vs <b>{b_stats['CAGR']:.1%}</b> "
-                    f"for an equal-weight basket of the same stocks. The top 20% beat the basket in "
-                    f"<b>{bt['beat_rate']:.0%}</b> of months. Four years is short: the 24-year test above is the better "
-                    "guide to what to expect.</span></div>", unsafe_allow_html=True)
-        eq = pd.DataFrame({"Top 20% each month": (1 + bt["strategy"]).cumprod() * 10_000,
-                           "Average stock in the list": (1 + bt["benchmark"]).cumprod() * 10_000})
-        fig = go.Figure([go.Scatter(x=eq.index, y=eq[c], name=c, line=dict(width=2 if i == 0 else 1.5,
-                                                                          color=ui.GREEN if i == 0 else ui.MUTED))
-                         for i, c in enumerate(eq)])
-        fig.update_layout(title="What $10,000 became", yaxis=dict(tickprefix="$", tickformat=",.0f"), hovermode="x unified")
-        ui.plotly(fig, 400)
-        ui.metrics([
-            {"label": "Return per year", "value": ui.fmt_pct(s_stats["CAGR"]), "delta": f"{edge:+.1%} vs average",
-             "delta_color": "normal"},
-            {"label": "Worst drop", "value": ui.fmt_pct(s_stats["Max Drawdown"]),
-             "delta": f"average {ui.fmt_pct(b_stats['Max Drawdown'])}", "delta_color": "off", "delta_arrow": "off"},
-            {"label": "Sharpe ratio", "value": ui.fmt_num(s_stats["Sharpe"]),
-             "delta": f"average {ui.fmt_num(b_stats['Sharpe'])}", "delta_color": "off", "delta_arrow": "off",
-             "help": tip("Sharpe")},
-            {"label": "Months ahead", "value": ui.fmt_pct(bt["beat_rate"], 0),
-             "help": "Share of months the top 20% returned more than the equal-weight basket."},
-            {"label": "Right direction", "value": ui.fmt_pct(bt["hit_rate"], 0),
-             "help": "Share of months where higher-ranked stocks did better than lower-ranked ones across the whole list "
-                     f"(positive rank correlation; the average was {bt['ic_mean']:.3f}). Real signals in big stocks "
-                     "land around 52-60%."},
-            {"label": "Portfolio turnover", "value": ui.fmt_pct(bt["avg_turnover"], 0),
-             "help": "Share of the portfolio replaced each month. Higher turnover means more trading costs (10 bps charged)."},
-        ], key="btm")
-        st.caption("Caveat: the replay uses today's index members, so companies that were dropped (often the big losers) "
-                   "are missing, which flatters both lines. Past results don't guarantee future ones.")
+        st.subheader("Replay: the last ~4 years with your weights")
+        with_earn = bool(use_fund and tw.get("Earnings", 0) > 0)
+        replayed = [t for t in factors.REPLAYABLE if tw.get(t, 0) > 0 and (with_earn or t in factors.PRICE_FACTORS)]
+        st.caption("Every month, buy the top 20% of this list using only what was known then, hold a month, pay trading "
+                   f"costs, repeat. It can rebuild {', '.join(replayed) if replayed else 'no theme'} from history; Value, "
+                   "Quality, Growth and Analysts are left out because free data doesn't keep their past values.")
+        with st.spinner("Replaying the ranking month by month…"):
+            try:
+                bt = factor_backtest(tuple(px.columns), tuple(sorted(tw.items())), with_earn)
+            except ValueError as e:
+                st.warning(str(e))
+                bt = None
+        if bt:
+            s_stats = risk.summary(bt["strategy"], bt["benchmark"])
+            b_stats = risk.summary(bt["benchmark"])
+            edge = s_stats["CAGR"] - b_stats["CAGR"]
+            verdict = ("The top of the ranking beat the average stock" if edge > 0.01 else
+                       "The top of the ranking did about the same as the average stock" if edge > -0.01 else
+                       "The top of the ranking lagged the average stock")
+            st.markdown(f"<div class='sf-card'>{ui.pill('Ahead' if edge > 0.01 else 'Even' if edge > -0.01 else 'Behind', 'pos' if edge > 0.01 else 'neu' if edge > -0.01 else 'neg')}"
+                        f"<span class='sf-note'>{verdict}: <b>{s_stats['CAGR']:.1%}</b> a year vs <b>{b_stats['CAGR']:.1%}</b> "
+                        f"for an equal-weight basket of the same stocks. The top 20% beat the basket in "
+                        f"<b>{bt['beat_rate']:.0%}</b> of months. Four years is short: the 24-year test above is the better "
+                        "guide to what to expect.</span></div>", unsafe_allow_html=True)
+            eq = pd.DataFrame({"Top 20% each month": (1 + bt["strategy"]).cumprod() * 10_000,
+                               "Average stock in the list": (1 + bt["benchmark"]).cumprod() * 10_000})
+            fig = go.Figure([go.Scatter(x=eq.index, y=eq[c], name=c, line=dict(width=2 if i == 0 else 1.5,
+                                                                              color=ui.GREEN if i == 0 else ui.MUTED))
+                             for i, c in enumerate(eq)])
+            fig.update_layout(title="What $10,000 became", yaxis=dict(tickprefix="$", tickformat=",.0f"), hovermode="x unified")
+            ui.plotly(fig, 400)
+            ui.metrics([
+                {"label": "Return per year", "value": ui.fmt_pct(s_stats["CAGR"]), "delta": f"{edge:+.1%} vs average",
+                 "delta_color": "normal"},
+                {"label": "Worst drop", "value": ui.fmt_pct(s_stats["Max Drawdown"]),
+                 "delta": f"average {ui.fmt_pct(b_stats['Max Drawdown'])}", "delta_color": "off", "delta_arrow": "off"},
+                {"label": "Sharpe ratio", "value": ui.fmt_num(s_stats["Sharpe"]),
+                 "delta": f"average {ui.fmt_num(b_stats['Sharpe'])}", "delta_color": "off", "delta_arrow": "off",
+                 "help": tip("Sharpe")},
+                {"label": "Months ahead", "value": ui.fmt_pct(bt["beat_rate"], 0),
+                 "help": "Share of months the top 20% returned more than the equal-weight basket."},
+                {"label": "Right direction", "value": ui.fmt_pct(bt["hit_rate"], 0),
+                 "help": "Share of months where higher-ranked stocks did better than lower-ranked ones across the whole list "
+                         f"(positive rank correlation; the average was {bt['ic_mean']:.3f}). Real signals in big stocks "
+                         "land around 52-60%."},
+                {"label": "Portfolio turnover", "value": ui.fmt_pct(bt["avg_turnover"], 0),
+                 "help": "Share of the portfolio replaced each month. Higher turnover means more trading costs (10 bps charged)."},
+            ], key="btm")
+            st.caption("Caveat: the replay uses today's index members, so companies that were dropped (often the big losers) "
+                       "are missing, which flatters both lines. Past results don't guarantee future ones.")
 
 ui.disclaimer()

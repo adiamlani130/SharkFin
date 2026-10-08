@@ -10,11 +10,13 @@ from __future__ import annotations
 import copy
 import functools
 import logging
+import pickle
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -47,10 +49,43 @@ def ttl_cache(seconds: int):
                     _cache[key] = (now, val)
             return val
 
+        def cached(*args, **kwargs) -> bool:
+            """Whether a call with these arguments would be answered from the cache."""
+            with _lock:
+                hit = _cache.get((fn.__qualname__, args, tuple(sorted(kwargs.items()))))
+            return bool(hit) and time.time() - hit[0] < seconds
+
         wrapper.cache_clear = lambda: _cache.clear()
+        wrapper.cached = cached
         return wrapper
 
     return deco
+
+
+def prefetch(jobs: list, workers: int = 8, progress=None) -> None:
+    """Warm the cache for many calls at once: ``jobs`` is a list of ``(fn, args)`` or ``(fn, args, kwargs)``.
+
+    Calls already cached are skipped. ``progress(done, total)`` runs on the calling thread after each call
+    finishes, so a Streamlit page can update a progress bar from it. If ``progress`` raises (Streamlit stops
+    a script that way when the user changes a setting), calls not yet started are dropped and the ones
+    running finish in the background; everything finished stays cached, so the next run picks up where
+    this one stopped.
+    """
+    jobs = [(j[0], j[1], j[2] if len(j) > 2 else {}) for j in jobs]
+    todo = [(fn, a, kw) for fn, a, kw in jobs if not getattr(fn, "cached", lambda *_, **__: False)(*a, **kw)]
+    if not todo:
+        return
+    ex = ThreadPoolExecutor(max_workers=workers)
+    try:
+        pending = {ex.submit(fn, *a, **kw) for fn, a, kw in todo}
+        done = 0
+        while pending:
+            finished, pending = wait(pending, timeout=1.0, return_when=FIRST_COMPLETED)
+            done += len(finished)
+            if progress is not None:
+                progress(done, len(todo))
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
 
 
 def _copy(v):
@@ -248,13 +283,53 @@ def analyst_data(symbol: str) -> dict:
     return out
 
 
+EARNINGS_DIR = Path(".sharkfin") / "cache" / "earnings"
+
+
+def _earnings_fresh(ed: pd.DataFrame, fetched: float, now: float | None = None) -> bool:
+    """A saved earnings history is still good unless it is a week old or a report date has passed since it
+    was fetched (earnings only change when a company reports)."""
+    now = time.time() if now is None else now
+    if now - fetched > 7 * 86400:
+        return False
+    idx = pd.DatetimeIndex(ed.index)
+    secs = (idx.tz_convert("UTC") if idx.tz is not None else idx).asi8 / 1e9
+    return not bool(((secs > fetched - 86400) & (secs <= now)).any())
+
+
+def _earnings_from_disk(symbol: str, limit: int) -> pd.DataFrame | None:
+    try:
+        with open(EARNINGS_DIR / f"{symbol}_{limit}.pkl", "rb") as f:
+            fetched, ed = pickle.load(f)
+        return ed if isinstance(ed, pd.DataFrame) and _earnings_fresh(ed, fetched) else None
+    except Exception:
+        return None
+
+
+def _earnings_to_disk(symbol: str, limit: int, ed: pd.DataFrame) -> None:
+    try:
+        EARNINGS_DIR.mkdir(parents=True, exist_ok=True)
+        with open(EARNINGS_DIR / f"{symbol}_{limit}.pkl", "wb") as f:
+            pickle.dump((time.time(), ed), f)
+    except Exception as e:  # pragma: no cover - read-only disk
+        log.warning("couldn't save earnings for %s: %s", symbol, e)
+
+
 @ttl_cache(12 * 3600)
 def earnings_history(symbol: str, limit: int = 28) -> pd.DataFrame:
-    """Yahoo's earnings dates (EPS estimate, reported EPS, surprise %), about seven years for ``limit=28``."""
+    """Yahoo's earnings dates (EPS estimate, reported EPS, surprise %), about seven years for ``limit=28``.
+
+    Yahoo only serves these from a slow page (about a second per stock), so a copy is kept on disk and reused
+    until the stock reports again.
+    """
+    saved = _earnings_from_disk(symbol, limit)
+    if saved is not None:
+        return saved
     for attempt in range(2):
         try:
             ed = _yf().Ticker(symbol).get_earnings_dates(limit=limit)
             if isinstance(ed, pd.DataFrame) and not ed.empty:
+                _earnings_to_disk(symbol, limit, ed)
                 return ed
         except Exception as e:  # pragma: no cover - network
             log.warning("earnings_history(%s) failed: %s", symbol, e)
@@ -271,7 +346,7 @@ def earnings_histories(symbols: tuple, workers: int = 6) -> dict:
 
 
 @ttl_cache(12 * 3600)
-def infos(symbols: tuple, workers: int = 6) -> pd.DataFrame:
+def infos(symbols: tuple, workers: int = 10) -> pd.DataFrame:
     """``info`` for many symbols in parallel (used for peers and the scanner)."""
     with ThreadPoolExecutor(max_workers=workers) as ex:
         rows = list(ex.map(info, symbols))
