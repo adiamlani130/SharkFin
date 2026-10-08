@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from sharkfin import builder, data, leader_dip, ui
+from sharkfin import builder, data, leader_dip, swing, ui
 from sharkfin.explain import tip
 
 ui.header("Strategy Lab",
@@ -149,6 +149,17 @@ def build_tab():
         return
     stt = res["stats"]
     buy_txt, sell_txt = builder.describe_strategy(s)
+    u1, u2 = st.columns([2, 5], vertical_alignment="center")
+    if u1.button("Use as my swing strategy", icon=":material/bookmark_add:",
+                 help="Top Performers → Swing setups and Research → Trade setup will use these rules instead of "
+                      "Leader Dip. Switch back any time from the Swing strategy box on either page."):
+        if ui.save_my_swing_rules(swing.clean(s)):
+            ui.set_swing_choice(swing.MINE)
+            st.toast("Saved. Top Performers and Research now use these rules for swing trades.")
+        else:
+            st.toast("Couldn't save the rules on the server.")
+    current = ui.swing_choice()
+    u2.caption(f"Swing strategy used across the app: **{current}**.")
 
     end_val, bh_val = START * (1 + stt["Total return"]), START * (1 + stt["Buy & hold return"])
     beat = stt["Return per year"] > stt["Buy & hold per year"]

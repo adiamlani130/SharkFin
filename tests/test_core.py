@@ -473,3 +473,75 @@ def test_builder_templates_run_and_describe():
     runs = builder.compare_templates(d, ["Golden cross", "55-day breakout"], 5, 0.0)
     a, b = runs.values()
     assert a["equity"].index[0] == b["equity"].index[0]
+
+
+# --------------------------------------------------------------------- earnings theme, could run, swing choice
+
+def _earn_table(dates, est, rep):
+    idx = pd.DatetimeIndex(pd.to_datetime(dates)).tz_localize("America/New_York")
+    est, rep = np.array(est, float), np.array(rep, float)
+    return pd.DataFrame({"EPS Estimate": est, "Reported EPS": rep, "Surprise(%)": (rep - est) / np.abs(est) * 100},
+                        index=idx)[::-1]
+
+
+def test_earnings_factors_use_only_past_reports():
+    t = _earn_table(["2025-01-20", "2025-04-20", "2025-07-20", "2025-10-20", "2026-01-20", "2026-04-20"],
+                    [1.0, 1.0, 1.0, 1.0, 1.0, 1.0], [0.9, 1.1, 1.2, 1.05, 1.5, 1.4])
+    now = factors.earnings_factor_frame({"A": t}, asof=pd.Timestamp("2026-05-01")).loc["A"]
+    assert now["eps_surprise"] == pytest.approx(40.0)
+    assert now["beat_streak"] == 5
+    assert now["eps_yoy"] == pytest.approx((1.4 - 1.1) / 1.1)
+    before = factors.earnings_factor_frame({"A": t}, asof=pd.Timestamp("2025-03-01")).loc["A"]
+    assert before["eps_surprise"] == pytest.approx(-10.0) and before["beat_streak"] == 0
+    stale = factors.earnings_factor_frame({"A": t}, asof=pd.Timestamp("2026-12-01")).loc["A"]
+    assert np.isnan(stale["eps_surprise"])
+
+
+def test_composite_adds_earnings_theme_and_drops_zero_weight_themes(price_panel):
+    pf = factors.price_factor_frame(price_panel)
+    ef = pd.DataFrame({"eps_surprise": np.linspace(-20, 20, len(pf)), "beat_streak": np.arange(len(pf)) % 5},
+                      index=pf.index)
+    sc = factors.composite_scores(pf, earn_f=ef)
+    assert "Earnings" in sc.columns
+    assert factors.DEFAULT_THEME_WEIGHTS["Low Risk"] == 0 and factors.DEFAULT_THEME_WEIGHTS["Analysts"] == 0
+    only_earn = factors.composite_scores(pf, theme_weights={"Earnings": 1.0}, earn_f=ef)
+    assert only_earn["Composite"].corr(ef["eps_surprise"]) > 0.9
+
+
+def test_factor_replay_with_earnings(price_panel):
+    from tests import fakes
+    earn = {s: fakes.earnings_history(s) for s in price_panel.columns}
+    res = factors.backtest_price_composite(price_panel, earnings=earn)
+    assert "Earnings" in res["themes"] and 0 <= res["beat_rate"] <= 1
+    with pytest.raises(ValueError):
+        factors.backtest_price_composite(price_panel, theme_weights={"Value": 1.0})
+
+
+def test_could_run_screen(price_panel):
+    from sharkfin import catalysts
+    pf = factors.price_factor_frame(price_panel)
+    ef = pd.DataFrame({"eps_surprise": 5.0, "beat_streak": 2.0, "eps_yoy": 0.3}, index=pf.index)
+    sc = factors.composite_scores(pf, earn_f=ef)
+    picks, funnel = catalysts.could_run(sc, price_panel)
+    assert [f["Rule"] for f in funnel] == ["Start", "Volatile", "Uptrend", "Strong 6 months", "Beat last report"]
+    assert funnel[-1]["Still in"] == len(picks) <= funnel[1]["Still in"] <= len(sc)
+    assert (picks["trend_200"] > 0).all()
+
+
+def test_swing_choice_rules_and_status(ohlcv):
+    from sharkfin import builder, swing
+    assert swing.choices()[0] == swing.LEADER_DIP and swing.MINE not in swing.choices()
+    assert swing.rules(swing.LEADER_DIP) is None
+    mine = builder.template("RSI dip in an uptrend")
+    mine["entry"][0]["id"] = 123
+    cleaned = swing.clean(mine)
+    assert "id" not in cleaned["entry"][0] and swing.MINE in swing.choices(cleaned)
+    assert swing.rules(swing.MINE, cleaned) == cleaned
+    st_ = swing.stock_status(ohlcv, swing.rules("RSI dip in an uptrend"))
+    assert st_["label"] in {"In a trade", "Buy signal", "Sell signal", "No signal"}
+    assert st_["stats"]["Trades"] >= 1 and len(st_["checks"]) == 3
+    # Always-true rules signal on every stock in a scan.
+    always = {"logic": "ALL", "entry": [builder.C("Price", "is above", value=0)], "exit": [], "stop": 0.0}
+    frames = {f: pd.DataFrame({"A": ohlcv[f], "B": ohlcv[f] * 2}) for f in ("Open", "High", "Low", "Close", "Volume")}
+    sig = swing.scan(frames, always)
+    assert set(sig.index) == {"A", "B"} and (sig["Signals in the last 20 days"] == 20).all()

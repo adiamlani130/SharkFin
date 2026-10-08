@@ -249,6 +249,28 @@ def analyst_data(symbol: str) -> dict:
 
 
 @ttl_cache(12 * 3600)
+def earnings_history(symbol: str, limit: int = 28) -> pd.DataFrame:
+    """Yahoo's earnings dates (EPS estimate, reported EPS, surprise %), about seven years for ``limit=28``."""
+    for attempt in range(2):
+        try:
+            ed = _yf().Ticker(symbol).get_earnings_dates(limit=limit)
+            if isinstance(ed, pd.DataFrame) and not ed.empty:
+                return ed
+        except Exception as e:  # pragma: no cover - network
+            log.warning("earnings_history(%s) failed: %s", symbol, e)
+        time.sleep(0.8 * (attempt + 1))
+    return pd.DataFrame()
+
+
+@ttl_cache(12 * 3600)
+def earnings_histories(symbols: tuple, workers: int = 6) -> dict:
+    """Earnings dates for many symbols in parallel: {symbol: DataFrame}."""
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        frames = list(ex.map(earnings_history, symbols))
+    return {s: f for s, f in zip(symbols, frames) if isinstance(f, pd.DataFrame) and not f.empty}
+
+
+@ttl_cache(12 * 3600)
 def infos(symbols: tuple, workers: int = 6) -> pd.DataFrame:
     """``info`` for many symbols in parallel (used for peers and the scanner)."""
     with ThreadPoolExecutor(max_workers=workers) as ex:

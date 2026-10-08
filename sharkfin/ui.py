@@ -386,6 +386,49 @@ def save_state():
         st.toast(f"Could not save: {e}")
 
 
+def my_swing_rules() -> dict | None:
+    """The rule set the user saved from Strategy Lab as their swing strategy, if any."""
+    rows = _load("my_swing_strategy")
+    return rows[0] if rows and isinstance(rows[0], dict) else None
+
+
+def save_my_swing_rules(rules: dict) -> bool:
+    return save_list("my_swing_strategy", [rules])
+
+
+def swing_choice() -> str:
+    """The swing strategy picked anywhere in the app (shared by Top Performers and Research)."""
+    from . import swing
+
+    ss = st.session_state
+    if "swing_choice" not in ss:
+        saved = _load("swing_choice")
+        ss.swing_choice = saved[0] if saved and isinstance(saved[0], str) else swing.LEADER_DIP
+    if ss.swing_choice not in swing.choices(my_swing_rules()):
+        ss.swing_choice = swing.LEADER_DIP
+    return ss.swing_choice
+
+
+def set_swing_choice(name: str):
+    st.session_state.swing_choice = name
+    save_list("swing_choice", [name])
+
+
+def swing_picker(key: str) -> str:
+    """Select box for the swing strategy; the choice is remembered across pages and visits."""
+    from . import swing
+
+    current = swing_choice()
+    opts = swing.choices(my_swing_rules())
+    wkey = f"swing_pick_{key}"
+    if st.session_state.get(wkey) not in opts:
+        st.session_state[wkey] = current
+    return st.selectbox("Swing strategy", opts, key=wkey, on_change=lambda: set_swing_choice(st.session_state[wkey]),
+                        help="Leader Dip is SharkFin's tested default. Pick a Strategy Lab template, or save your own "
+                             "rules in Strategy Lab → Build and test → Use as my swing strategy. The choice applies on "
+                             "Top Performers and Research.")
+
+
 # ---------------------------------------------------------------------------
 # Widgets
 # ---------------------------------------------------------------------------
