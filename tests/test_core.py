@@ -545,3 +545,50 @@ def test_swing_choice_rules_and_status(ohlcv):
     frames = {f: pd.DataFrame({"A": ohlcv[f], "B": ohlcv[f] * 2}) for f in ("Open", "High", "Low", "Close", "Volume")}
     sig = swing.scan(frames, always)
     assert set(sig.index) == {"A", "B"} and (sig["Signals in the last 20 days"] == 20).all()
+
+
+def test_prefetch_skips_cached_reports_progress_and_stops_on_interrupt():
+    from sharkfin import data
+    data._cache.clear()
+    seen = []
+
+    @data.ttl_cache(60)
+    def slow(x):
+        seen.append(x)
+        return x * 2
+
+    slow(1)
+    ticks = []
+    data.prefetch([(slow, (i,)) for i in range(1, 6)], workers=2, progress=lambda d, t: ticks.append((d, t)))
+    assert sorted(seen) == [1, 2, 3, 4, 5] and ticks[-1] == (4, 4) and slow.cached(5)
+
+    import time as _t
+
+    @data.ttl_cache(60)
+    def sleepy(x):
+        _t.sleep(0.2)
+        return x
+
+    def stop(done, total):
+        raise RuntimeError("user changed a setting")
+    with pytest.raises(RuntimeError):
+        data.prefetch([(sleepy, (i,)) for i in range(40)], workers=2, progress=stop)
+    _t.sleep(0.5)
+    assert sum(sleepy.cached(i) for i in range(40)) < 10  # the queued calls were dropped
+    data._cache.clear()
+
+
+def test_saved_earnings_are_reused_until_the_next_report(monkeypatch, tmp_path):
+    from sharkfin import data
+    now = pd.Timestamp("2026-10-08", tz="UTC").timestamp()
+    day = 86400
+    ed = pd.DataFrame({"Reported EPS": [np.nan, 1.2]},
+                      index=pd.DatetimeIndex(["2026-10-20", "2026-07-20"]).tz_localize("America/New_York"))
+    assert data._earnings_fresh(ed, now - 2 * day, now)
+    assert not data._earnings_fresh(ed, now - 8 * day, now)  # a week old
+    assert not data._earnings_fresh(ed, now - 2 * day, pd.Timestamp("2026-10-21", tz="UTC").timestamp())  # reported
+
+    monkeypatch.setattr(data, "EARNINGS_DIR", tmp_path / "earn")
+    data._earnings_to_disk("AAPL", 28, ed)
+    back = data._earnings_from_disk("AAPL", 28)
+    assert back is not None and back.equals(ed)

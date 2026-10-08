@@ -1,5 +1,5 @@
 # SharkFin dependencies
-streamlit>=1.50
+streamlit>=1.55
 yfinance>=0.2.60
 pandas>=2.2
 numpy>=1.26
