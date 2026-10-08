@@ -87,6 +87,9 @@ def install(monkeypatch):
     monkeypatch.setattr(data, "risk_free_rate", lambda: 0.042)
     monkeypatch.setattr(data, "tbill_yields", lambda period="10y": pd.Series(0.04, index=history("^IRX").index))
     monkeypatch.setattr(data, "analyst_data", analyst_data)
+    monkeypatch.setattr(data, "earnings_history", earnings_history)
+    monkeypatch.setattr(data, "earnings_histories",
+                        lambda syms, workers=6: {s: earnings_history(s) for s in syms})
     monkeypatch.setattr(data, "download_ohlcv", download_ohlcv)
     monkeypatch.setattr(data, "sec_filings", sec_filings)
     monkeypatch.setattr(data, "sec_document_text", sec_document_text)
@@ -131,3 +134,17 @@ def sec_document_text(url):
     base = "Item 1A. Risk Factors " + "Our business faces competition from many rivals in every market we serve. " * 60
     extra = "New tariffs on imported components could materially raise our costs and hurt margins next year. " * 20
     return base + (extra if url.endswith("k1") else "") + " Item 1B. Unresolved Staff Comments none."
+
+
+def earnings_history(symbol, limit=28):
+    """Quarterly reports for the past ~5 years (newest first, like Yahoo) with a symbol-dependent run of surprises."""
+    rng = np.random.default_rng(sum(map(ord, symbol)))
+    idx = pd.date_range(end="2026-11-30", periods=22, freq="QS-JAN") + pd.Timedelta(days=19)
+    est = np.linspace(1.0, 2.0, len(idx))
+    sur = rng.normal(3, 6, len(idx))
+    rep = est * (1 + sur / 100)
+    future = idx > pd.Timestamp.now()
+    rep[future], sur[future] = np.nan, np.nan
+    df = pd.DataFrame({"EPS Estimate": est, "Reported EPS": rep, "Surprise(%)": sur},
+                      index=idx.tz_localize("America/New_York"))
+    return df.iloc[::-1]

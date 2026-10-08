@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from sharkfin import ai, catalysts, data, leader_dip, levels, ratings, risk, sentiment, ui, valuation
+from sharkfin import ai, catalysts, data, leader_dip, levels, ratings, risk, sentiment, swing, ui, valuation
 from sharkfin import indicators as ind
 from sharkfin.explain import tip
 
@@ -158,6 +158,9 @@ with st.spinner("Ranking against the S&P 500…"):
     idx_px, idx_sec = index_panel()
 ref_gains = leader_dip.six_month_gain(idx_px.ffill()).iloc[-1].dropna() if not idx_px.empty else None
 ld = leader_dip.stock_status(hist, ref_gains, mkt["Close"] if not mkt.empty else None)
+swing_name = ui.swing_choice()
+swing_rules = swing.rules(swing_name, ui.my_swing_rules())
+sw = swing.stock_status(hist, swing_rules, mkt["Close"] if not mkt.empty else None, rf=rf) if swing_rules else None
 zones = levels.sr_zones(hist)
 resistance, support = levels.nearest_levels(hist, zones)
 weekly = levels.weekly_trend(hist["Close"])
@@ -489,64 +492,127 @@ with tabs[1]:
 # ---------------------------------------------------------------------------
 # Trade setup: swing entry/exit plan and long-term (core long) checklist
 # ---------------------------------------------------------------------------
-with tabs[2]:
-    st.subheader("Swing trade: Leader Dip (days)",
-                 help="SharkFin's swing system: buy a sharp two-day drop in one of the S&P 500's strongest stocks while "
-                      "the market is in an uptrend, and sell into the bounce.")
-    st.markdown(f"<div class='sf-card'>{ui.pill(ui.h(ld['label']), ld['tone'])}<span class='sf-note'>{ui.h(ld['note'])}"
+def swing_rule_setup():
+    """The chosen Strategy Lab rule set applied to this stock: where it stands, its rules, and how it traded here."""
+    st.subheader(f"Swing trade: {swing_name}")
+    if not swing_rules or not swing_rules.get("entry"):
+        st.info("This strategy has no buy rules yet. Build one in Strategy Lab → Build and test.")
+        return
+    st.markdown(f"<div class='sf-card'>{ui.pill(ui.h(sw['label']), sw['tone'])}<span class='sf-note'>{ui.h(sw['note'])}"
                 "</span></div>", unsafe_allow_html=True)
-    ui.metrics([
-        {"label": "2-day RSI", "value": ui.fmt_num(ld["rsi2"], 0), "delta": "buy below 10, sell above 70",
-         "delta_color": "off", "delta_arrow": "off", "help": tip("ld_rsi2")},
-        {"label": "vs 200-day average", "value": ui.fmt_pct(ld["vs200"], 1, True),
-         "delta": ("uptrend" if ld["vs200"] > 0 else "downtrend") if np.isfinite(ld["vs200"]) else None,
-         "delta_color": "normal" if ld["vs200"] > 0 else "inverse",
-         "delta_arrow": "off", "help": "The stock must close above its 200-day average."},
-        {"label": "6-month strength", "value": ui.fmt_pct(ld["rank"], 0) if np.isfinite(ld["rank"]) else None,
-         "delta": f"gain {ui.fmt_pct(ld['gain'], 0, True)}", "delta_color": "off", "delta_arrow": "off",
-         "help": tip("ld_strength")},
-        {"label": "Limit buy" if ld["signal"] else "Limit if it signals", "value": ui.fmt_money(ld["limit"]),
-         "delta": "3% under the close", "delta_color": "off", "delta_arrow": "off", "help": tip("ld_limit")},
-        {"label": "Market switch", "value": {True: "On", False: "Off", None: None}[ld["market_on"]],
-         "delta": f"SPY {ui.fmt_pct(ld['market_gap'], 1, True)} vs 200-day" if np.isfinite(ld["market_gap"]) else None,
-         "delta_color": "off", "delta_arrow": "off", "help": tip("ld_switch")},
-    ], key="ld")
-    st.caption(f"Exit: {leader_dip.EXIT_RULE} Up to {leader_dip.SLOTS} trades at once, each an equal share of the account.")
-    if ld["sell_now"]:
-        st.info("The 2-day RSI is above 70: if you hold a Leader Dip trade in this stock, it sells at the next open.")
-
+    stt = sw["stats"]
+    if stt:
+        ui.metrics([
+            {"label": "Trades (5 years)", "value": f"{stt['Trades']}"},
+            {"label": "Winning trades", "value": ui.fmt_pct(stt["Win rate"], 0) if stt["Trades"] else None},
+            {"label": "Return per year", "value": ui.fmt_pct(stt["Return per year"]),
+             "delta": f"buy & hold {ui.fmt_pct(stt['Buy & hold per year'])}", "delta_color": "off", "delta_arrow": "off"},
+            {"label": "Worst drop", "value": ui.fmt_pct(stt["Worst drop"]),
+             "delta": f"buy & hold {ui.fmt_pct(stt['Buy & hold worst drop'])}", "delta_color": "off", "delta_arrow": "off"},
+            {"label": "Sharpe ratio", "value": ui.fmt_num(stt["Sharpe"]),
+             "delta": f"buy & hold {ui.fmt_num(stt['Buy & hold Sharpe'])}", "delta_color": "off", "delta_arrow": "off",
+             "help": tip("Sharpe")},
+        ], key="swr")
+    res = sw.get("result")
     view = hist.iloc[-160:]
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.74, 0.26], vertical_spacing=0.04)
+    fig = go.Figure()
     fig.add_candlestick(x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"], name=sym,
                         increasing_line_color=ui.GREEN, decreasing_line_color=ui.RED, increasing_fillcolor=ui.GREEN,
-                        decreasing_fillcolor=ui.RED, row=1, col=1)
-    fig.add_scatter(x=view.index, y=ld["sma200_series"].reindex(view.index), name="SMA 200",
-                    line=dict(width=1.3, color=ui.MA_COLORS["SMA 200"]), row=1, col=1)
+                        decreasing_fillcolor=ui.RED)
+    if res is not None:
+        tr = res["trades"]
+        tr = tr[tr["Exit date"] >= view.index[0]] if not tr.empty else tr
+        buys = list(tr["Entry date"]) + ([res["open_trade"]["Entry date"]] if res["open_trade"] else [])
+        buys = [d for d in buys if d >= view.index[0]]
+        if buys:
+            fig.add_scatter(x=buys, y=view["Low"].reindex(buys) * 0.985, mode="markers", name="Bought",
+                            marker=dict(symbol="triangle-up", size=11, color=ui.GREEN))
+        if not tr.empty:
+            fig.add_scatter(x=tr["Exit date"], y=view["High"].reindex(tr["Exit date"]) * 1.015, mode="markers",
+                            name="Sold", marker=dict(symbol="triangle-down", size=11, color=ui.RED))
     lo_v, hi_v = view["Low"].min(), view["High"].max()
     for zn in zones:
         if lo_v * 0.97 <= zn["mid"] <= hi_v * 1.05 and (zn["touches"] >= 2 or abs(zn["mid"] / price - 1) < 0.05):
             color = "rgba(255,92,122,0.12)" if zn["kind"] == "resistance" else "rgba(45,212,163,0.12)"
-            fig.add_hrect(y0=zn["low"] - 0.002 * zn["mid"], y1=zn["high"] + 0.002 * zn["mid"], fillcolor=color,
-                          line_width=0, row=1, col=1)
-    if ld["signal"]:
-        fig.add_hline(y=ld["limit"], line=dict(color=ui.BLUE, dash="dash", width=1), annotation_text="Limit buy",
-                      annotation_position="right", row=1, col=1)
-    fig.add_scatter(x=view.index, y=ld["rsi2_series"].reindex(view.index), name="2-day RSI",
-                    line=dict(width=1.1, color=ui.PURPLE), row=2, col=1)
-    for lvl in (leader_dip.BUY_BELOW, leader_dip.SELL_ABOVE):
-        fig.add_hline(y=lvl, line=dict(color=ui.MUTED, dash="dot", width=1), row=2, col=1)
-    fig.update_yaxes(range=[lo_v * 0.95, hi_v * 1.03], row=1, col=1)
-    fig.update_yaxes(range=[0, 100], row=2, col=1)
+            fig.add_hrect(y0=zn["low"] - 0.002 * zn["mid"], y1=zn["high"] + 0.002 * zn["mid"], fillcolor=color, line_width=0)
+    fig.update_yaxes(range=[lo_v * 0.95, hi_v * 1.03])
     fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], rangeslider_visible=False)
-    fig.update_layout(title="Daily chart with the 200-day, support (green) and resistance (red) zones, and the 2-day RSI",
+    fig.update_layout(title="Daily chart with the rules' trades over the last ~8 months, support (green) and resistance (red)",
                       hovermode="x unified")
-    ui.plotly(fig, 500)
+    ui.plotly(fig, 440)
     ui.kv([("Nearest resistance", ui.fmt_money(resistance)), ("Nearest support", ui.fmt_money(support)),
            ("Weekly trend", weekly["label"])])
-    with st.expander(f"Leader Dip checklist ({sum(bool(c['Pass']) for c in ld['checklist'])}/{len(ld['checklist'])} pass)"):
-        ui.checklist(ld["checklist"], "Rule")
-        st.caption("Strength is ranked against every S&P 500 stock's 6-month gain. Strategy Lab → Leader Dip backtests "
-                   "the system on the whole index.")
+    checks = sw["checks"]
+    with st.expander(f"Rules at the last close ({sum(bool(c['Pass']) for c in checks)}/{len(checks)} true)"):
+        ui.checklist(checks, "Rule")
+    st.caption(swing.NOTE_UNTESTED + " Strategy Lab → Build and test shows the full trade list.")
+
+
+with tabs[2]:
+    pc1, pc2 = st.columns([2, 5], vertical_alignment="bottom")
+    with pc1:
+        ui.swing_picker("rs")
+    pc2.caption(swing.about(swing_name))
+    if swing_name == swing.LEADER_DIP:
+        st.subheader("Swing trade: Leader Dip (days)",
+                     help="SharkFin's swing system: buy a sharp two-day drop in one of the S&P 500's strongest stocks while "
+                          "the market is in an uptrend, and sell into the bounce.")
+        st.markdown(f"<div class='sf-card'>{ui.pill(ui.h(ld['label']), ld['tone'])}<span class='sf-note'>{ui.h(ld['note'])}"
+                    "</span></div>", unsafe_allow_html=True)
+        ui.metrics([
+            {"label": "2-day RSI", "value": ui.fmt_num(ld["rsi2"], 0), "delta": "buy below 10, sell above 70",
+             "delta_color": "off", "delta_arrow": "off", "help": tip("ld_rsi2")},
+            {"label": "vs 200-day average", "value": ui.fmt_pct(ld["vs200"], 1, True),
+             "delta": ("uptrend" if ld["vs200"] > 0 else "downtrend") if np.isfinite(ld["vs200"]) else None,
+             "delta_color": "normal" if ld["vs200"] > 0 else "inverse",
+             "delta_arrow": "off", "help": "The stock must close above its 200-day average."},
+            {"label": "6-month strength", "value": ui.fmt_pct(ld["rank"], 0) if np.isfinite(ld["rank"]) else None,
+             "delta": f"gain {ui.fmt_pct(ld['gain'], 0, True)}", "delta_color": "off", "delta_arrow": "off",
+             "help": tip("ld_strength")},
+            {"label": "Limit buy" if ld["signal"] else "Limit if it signals", "value": ui.fmt_money(ld["limit"]),
+             "delta": "3% under the close", "delta_color": "off", "delta_arrow": "off", "help": tip("ld_limit")},
+            {"label": "Market switch", "value": {True: "On", False: "Off", None: None}[ld["market_on"]],
+             "delta": f"SPY {ui.fmt_pct(ld['market_gap'], 1, True)} vs 200-day" if np.isfinite(ld["market_gap"]) else None,
+             "delta_color": "off", "delta_arrow": "off", "help": tip("ld_switch")},
+        ], key="ld")
+        st.caption(f"Exit: {leader_dip.EXIT_RULE} Up to {leader_dip.SLOTS} trades at once, each an equal share of the account.")
+        if ld["sell_now"]:
+            st.info("The 2-day RSI is above 70: if you hold a Leader Dip trade in this stock, it sells at the next open.")
+
+        view = hist.iloc[-160:]
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.74, 0.26], vertical_spacing=0.04)
+        fig.add_candlestick(x=view.index, open=view["Open"], high=view["High"], low=view["Low"], close=view["Close"], name=sym,
+                            increasing_line_color=ui.GREEN, decreasing_line_color=ui.RED, increasing_fillcolor=ui.GREEN,
+                            decreasing_fillcolor=ui.RED, row=1, col=1)
+        fig.add_scatter(x=view.index, y=ld["sma200_series"].reindex(view.index), name="SMA 200",
+                        line=dict(width=1.3, color=ui.MA_COLORS["SMA 200"]), row=1, col=1)
+        lo_v, hi_v = view["Low"].min(), view["High"].max()
+        for zn in zones:
+            if lo_v * 0.97 <= zn["mid"] <= hi_v * 1.05 and (zn["touches"] >= 2 or abs(zn["mid"] / price - 1) < 0.05):
+                color = "rgba(255,92,122,0.12)" if zn["kind"] == "resistance" else "rgba(45,212,163,0.12)"
+                fig.add_hrect(y0=zn["low"] - 0.002 * zn["mid"], y1=zn["high"] + 0.002 * zn["mid"], fillcolor=color,
+                              line_width=0, row=1, col=1)
+        if ld["signal"]:
+            fig.add_hline(y=ld["limit"], line=dict(color=ui.BLUE, dash="dash", width=1), annotation_text="Limit buy",
+                          annotation_position="right", row=1, col=1)
+        fig.add_scatter(x=view.index, y=ld["rsi2_series"].reindex(view.index), name="2-day RSI",
+                        line=dict(width=1.1, color=ui.PURPLE), row=2, col=1)
+        for lvl in (leader_dip.BUY_BELOW, leader_dip.SELL_ABOVE):
+            fig.add_hline(y=lvl, line=dict(color=ui.MUTED, dash="dot", width=1), row=2, col=1)
+        fig.update_yaxes(range=[lo_v * 0.95, hi_v * 1.03], row=1, col=1)
+        fig.update_yaxes(range=[0, 100], row=2, col=1)
+        fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], rangeslider_visible=False)
+        fig.update_layout(title="Daily chart with the 200-day, support (green) and resistance (red) zones, and the 2-day RSI",
+                          hovermode="x unified")
+        ui.plotly(fig, 500)
+        ui.kv([("Nearest resistance", ui.fmt_money(resistance)), ("Nearest support", ui.fmt_money(support)),
+               ("Weekly trend", weekly["label"])])
+        with st.expander(f"Leader Dip checklist ({sum(bool(c['Pass']) for c in ld['checklist'])}/{len(ld['checklist'])} pass)"):
+            ui.checklist(ld["checklist"], "Rule")
+            st.caption("Strength is ranked against every S&P 500 stock's 6-month gain. Strategy Lab → Leader Dip backtests "
+                       "the system on the whole index.")
+    else:
+        swing_rule_setup()
 
     st.subheader("Long-term hold (months to years)", help=tip("core_long"))
     st.markdown(f"<div class='sf-card'>{ui.pill(core['verdict'], core['tone'])}<span class='sf-note'>"
@@ -722,9 +788,11 @@ with glance:
          if np.isfinite(fv["fair_value"]) else None,
          "delta_color": "normal" if abs(fv["upside"]) >= 0.1 else "off",
          "help": "Blend of intrinsic value, peer multiples and analyst targets. Details on the Valuation tab."},
-        {"label": "Swing (Leader Dip)", "value": ld["label"],
+        {"label": f"Swing ({swing_name})", "value": ld["label"],
          "delta": f"2-day RSI {ld['rsi2']:.0f}" if np.isfinite(ld["rsi2"]) else None,
-         "delta_color": "off", "delta_arrow": "off", "help": "SharkFin's Leader Dip swing system. Details on Trade setup."},
+         "delta_color": "off", "delta_arrow": "off", "help": "SharkFin's Leader Dip swing system. Details on Trade setup."}
+        if sw is None else
+        {"label": f"Swing ({swing_name})", "value": sw["label"], "help": "Your chosen swing strategy. Details on Trade setup."},
         {"label": "Long-term", "value": {"pos": "Candidate", "neu": "Watch", "neg": "Not now"}[core["tone"]]
          if core["total"] else None, "delta": f"{core['passed']}/{core['total']} checks",
          "delta_color": "off", "delta_arrow": "off", "help": tip("core_long")},
@@ -761,6 +829,7 @@ if ai.available():
                 "analysts": analyst, "news_sentiment": news_agg,
                 "swing_setup_leader_dip": {k: ld.get(k) for k in ("label", "note", "rsi2", "vs200", "gain", "rank",
                                                                    "limit", "market_on")},
+                "swing_setup_chosen": {"strategy": swing_name, **({k: sw.get(k) for k in ("label", "note")} if sw else {})},
                 "levels": {"resistance": resistance, "support": support},
                 "weekly_trend": weekly,
                 "core_long": {"verdict": core.get("verdict"), "passed": core.get("passed"), "total": core.get("total")},

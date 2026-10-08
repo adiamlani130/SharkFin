@@ -356,9 +356,11 @@ def core_long_checklist(inf: dict, fin: valuation.Financials, hist: pd.DataFrame
 CORE_LONG_INTRO = (
     "Stocks to buy and hold for months to years. Every stock has to pass six simple rules (profitable, in an uptrend, "
     "rising steadily rather than in jumps, not too volatile, not over-borrowed, not expensive for its sector), then "
-    "the survivors are ranked by momentum, smoothness and value. Tested on S&amp;P 500 stocks from 2023 to 2025, the "
-    "top 25 had a median 12-month return of 21% versus 14% for the index members, 83% of them were up a year later, "
-    "and only 4% lost more than a fifth (vs 9%). That tilts the odds; it does not guarantee anything.")
+    "the survivors are ranked by momentum, smoothness and value. <b>What it does well is avoid disasters.</b> Tested "
+    "on point-in-time S&amp;P 500 members from 2002 to 2026, about 7-10% of the top 25 lost more than a fifth over "
+    "the next year, against 11-14% of all members, and 70% were up a year later (vs 67%). Their typical return was "
+    "the same as the average stock's: the 2023-25 stretch, when the picks returned 17% vs 12%, was a good run, "
+    "not the norm.")
 CORE_SCORE_HELP = ("Momentum + smoothness of the climb + value, each in standard deviations versus the list. "
                    "Higher is better; only stocks that pass every rule get a score.")
 
@@ -435,3 +437,54 @@ def core_long_screen(scores: pd.DataFrame, info_df: pd.DataFrame | None = None,
         if c not in out:
             out[c] = _col(inf, src).reindex(out.index)
     return out.sort_values("Core score", ascending=False).head(top), funnel
+
+
+# ---------------------------------------------------------------------------
+# Could run: the profile that came before most big 12-month winners
+# ---------------------------------------------------------------------------
+
+COULD_RUN_INTRO = (
+    "Big winners are hard to call ahead of time, but they come from a recognisable place. In the 2002-2026 test on "
+    "S&amp;P 500 members, nearly every stock that ended up in the top 5% over the next year was already a "
+    "<b>volatile</b> stock, and the volatile ones were also twice as likely to be the year's worst losers. Adding an "
+    "<b>uptrend</b>, <b>strong 6-month gains</b> and a <b>beat on the last earnings report</b> tilted those odds "
+    "toward the winners after 2013, but not in 2002-12. Treat this as a list of lottery tickets with better-than-"
+    "average odds: small positions, and expect several to fall hard.")
+COULD_RUN_RULES = [
+    ("Volatile", "63-day volatility in the top third of the list. Big winners (and big losers) almost all come from here."),
+    ("Uptrend", "Closing above its 200-day average."),
+    ("Strong 6 months", "6-month gain in the top 30% of the list."),
+    ("Beat last report", "Reported EPS above the estimate in the last 4 months."),
+]
+COULD_RUN_ODDS = pd.DataFrame([
+    {"Group": "All S&P 500 members", "Period": "2002-2012", "Top-5% winner": 0.052, "Top-5% loser": 0.048,
+     "Doubled": 0.022, "vs average stock": 0.0},
+    {"Group": "All S&P 500 members", "Period": "2013-2026", "Top-5% winner": 0.051, "Top-5% loser": 0.049,
+     "Doubled": 0.017, "vs average stock": 0.0},
+    {"Group": "Passed all four rules", "Period": "2002-2012", "Top-5% winner": 0.090, "Top-5% loser": 0.088,
+     "Doubled": 0.026, "vs average stock": 0.002},
+    {"Group": "Passed all four rules", "Period": "2013-2026", "Top-5% winner": 0.109, "Top-5% loser": 0.073,
+     "Doubled": 0.036, "vs average stock": 0.053},
+])
+
+
+def could_run(scores: pd.DataFrame, prices: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+    """Stocks with the profile that preceded most big 12-month winners. Returns the list and a rule funnel."""
+    df = scores.copy()
+    px = prices.reindex(columns=df.index)
+    gain6 = px.iloc[-1] / px.iloc[-min(127, len(px))] - 1
+    df["6-month gain"] = gain6
+    vol = _col(df, "volatility")
+    checks = {
+        "Volatile": vol.rank(pct=True) >= 2 / 3,
+        "Uptrend": _col(df, "trend_200") > 0,
+        "Strong 6 months": gain6.rank(pct=True) >= 0.7,
+        "Beat last report": _col(df, "eps_surprise") > 0,
+    }
+    keep = pd.Series(True, index=df.index)
+    funnel = [{"Rule": "Start", "Still in": int(len(df)), "Why": "Every stock in the list."}]
+    for name, why in COULD_RUN_RULES:
+        keep &= checks[name].fillna(False)
+        funnel.append({"Rule": name, "Still in": int(keep.sum()), "Why": why})
+    out = df[keep].sort_values("6-month gain", ascending=False)
+    return out, funnel

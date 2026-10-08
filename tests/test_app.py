@@ -128,3 +128,39 @@ def test_news_flags_big_beats():
     at.segmented_control[0].set_value("Stock catalysts").run()
     _ok(at)
     assert any("Big-beat flag" in md.value or "Big earnings beat" in md.value for md in at.markdown)
+
+
+def test_scanner_could_run_and_ranking_check():
+    at = _page("scanner")
+    at.button[0].click().run()
+    _ok(at)
+    assert any("Top-5% winner" in str(df.value.columns.tolist()) for df in at.dataframe)
+    assert any("Right direction" in str(df.value.columns.tolist()) for df in at.dataframe)
+    assert any(m.label == "Months ahead" for m in at.metric)
+    assert any("Earnings" in str(df.value.columns.tolist()) for df in at.dataframe)
+
+
+def test_swing_choice_follows_the_user_across_pages(tmp_path):
+    at = _page("scanner")
+    at.button[0].click().run()
+    at.selectbox(key="swing_pick_tp").set_value("Volume breakout").run()
+    _ok(at)
+    assert any("Buys</b> at the next open" in md.value for md in at.markdown)
+    assert (tmp_path / ".sharkfin" / "swing_choice.json").exists()
+    rs = _page("research")
+    _ok(rs)
+    labels = {m.label for m in rs.metric}
+    assert "Swing (Volume breakout)" in labels and "Trades (5 years)" in labels
+    rs.selectbox(key="swing_pick_rs").set_value("Leader Dip").run()
+    _ok(rs)
+    assert "Swing (Leader Dip)" in {m.label for m in rs.metric}
+
+
+def test_strategy_lab_saves_my_swing_strategy(tmp_path):
+    at = _page("strategy_lab")
+    next(b for b in at.button if b.label == "Use as my swing strategy").click().run()
+    _ok(at)
+    assert (tmp_path / ".sharkfin" / "my_swing_strategy.json").exists()
+    rs = _page("research")
+    _ok(rs)
+    assert "Swing (My Strategy Lab strategy)" in {m.label for m in rs.metric}
