@@ -14,4 +14,7 @@ Pure, testable analytics (no Streamlit imports) used by the UI pages:
 - ``ai``          optional Claude-written analyst report
 """
 
+import time
+
 __version__ = "2.0.0"
+LOADED_AT = time.time()  # main.py reloads the package when a deploy changes its files after this
