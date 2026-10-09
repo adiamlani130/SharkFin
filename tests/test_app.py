@@ -72,7 +72,7 @@ def _scanned(view=None):
 
 def test_scanner_every_tab_renders():
     at = _scanned()
-    for view in ("Rankings", "Swing setups", "Core longs", "Could run", "Sector VST list", "Does the ranking work?"):
+    for view in ("Rankings", "Swing setups", "Core longs", "Could run", "Shark Score list", "Does the ranking work?"):
         at.session_state["tp_view"] = view
         at.run()
         _ok(at)
@@ -153,7 +153,7 @@ def test_research_trade_setup_tab():
     labels = {m.label for m in at.metric}
     assert "Fair value" in labels
     assert {"2-day RSI", "vs 200-day average", "6-month strength", "Market switch", "Swing (Leader Dip)"}.issubset(labels)
-    assert any("vs its sector" in lab for lab in labels) and "VST" in labels
+    assert any("vs its sector" in lab for lab in labels) and {"Shark Score", "Value", "Risk"}.issubset(labels)
 
 
 def test_scanner_shows_signals_and_logs_them(monkeypatch, tmp_path):

@@ -351,20 +351,30 @@ def test_levels_zones_and_divergence(ohlcv):
 # --------------------------------------------------------------------- ratings
 
 def test_sector_relative_ratings(price_panel):
-    from sharkfin import ratings
+    from sharkfin import factors, ratings
+    from tests import fakes
     sectors = pd.Series(["A"] * 20 + ["B"] * 20, index=price_panel.columns)
-    info = pd.DataFrame({"trailingEps": np.linspace(-1, 8, 40), "earningsGrowth": 0.1,
-                         "currentPrice": price_panel.iloc[-1].values, "averageVolume": 1e6}, index=price_panel.columns)
-    rat = ratings.ratings(price_panel, sectors, info, 0.04)
-    for k in ("RV", "RT", "RS", "CI", "VST"):
-        assert rat[k].between(0, 2).all(), k
+    info = pd.DataFrame({"trailingEps": np.linspace(-1, 8, 40), "dividendYield": np.linspace(0, 0.04, 40),
+                         "currentPrice": price_panel.iloc[-1].values}, index=price_panel.columns)
+    ef = factors.earnings_factor_frame({s: fakes.earnings_history(s) for s in price_panel.columns})
+    rat = ratings.ratings(price_panel, sectors, info, ef)
+    for k in ("Shark Score", "Value", "Momentum", "Earnings", "Pullback", "Risk"):
+        assert rat[k].dropna().between(0, 100).all() and rat[k].notna().sum() >= 30, k
     # Ranked within each sector: every sector's ranks span the same range.
-    assert rat.groupby(sectors)["RT"].max().round(6).nunique() == 1
-    assert (rat.loc[info["trailingEps"] <= 0, "RV_raw"] == 0).all()
-    # RT follows relative strength: the planted winners (higher columns) trend better.
-    assert np.corrcoef(rat["rt_raw"], np.arange(40))[0, 1] > 0.3
-    top = ratings.vst_list(rat, pd.Series(np.linspace(-0.1, 0.1, 40), index=price_panel.columns), n=5)
-    assert len(top) == 5 and top["VST"].is_monotonic_decreasing
+    assert rat.groupby(sectors)["Momentum"].max().round(6).nunique() == 1
+    # Cheaper stocks (higher earnings and dividend yield, later columns here) rate higher on Value.
+    assert np.corrcoef(rat["Value"], np.arange(40))[0, 1] > 0.3
+    # Momentum follows relative strength: the planted winners (higher columns) climb better.
+    assert np.corrcoef(rat["mom_12_1"], np.arange(40))[0, 1] > 0.3
+    assert np.corrcoef(rat["Momentum"], rat["mom_12_1"].groupby(sectors).rank())[0, 1] > 0.6
+    assert rat["Shark Score"].round(6).equals(rat[["Value", "Momentum", "Earnings"]].mean(axis=1).round(6))
+    top = ratings.score_list(rat, n=5)
+    assert len(top) <= 5 and top["Shark Score"].is_monotonic_decreasing and (top["Risk"] <= 50).all()
+    assert ratings.shark_score({"Value": 80.0, "Momentum": 40.0, "Earnings": np.nan}) == 60.0
+    assert np.isnan(ratings.shark_score({"Value": 80.0}))
+    # Without company data only Momentum counts.
+    bare = ratings.ratings(price_panel, sectors)
+    assert bare["Value"].isna().all() and bare["Shark Score"].round(6).equals(bare["Momentum"].round(6))
 
 
 def test_sector_context(price_panel):

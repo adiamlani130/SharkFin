@@ -1,5 +1,5 @@
 """Top Performers: multi-factor rankings, swing setups for the chosen swing strategy, core longs, a could-run screen,
-the sector VST list and an honest check of whether the ranking works."""
+the Shark Score list and an honest check of whether the ranking works."""
 
 import json
 
@@ -125,12 +125,12 @@ def market_close() -> pd.Series:
     return m["Close"] if not m.empty else pd.Series(dtype=float)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def sector_ratings(symbols: tuple, with_fund: bool, weights: tuple) -> pd.DataFrame:
-    scores_, px_, info_ = scan(symbols, with_fund, weights)
-    if scores_ is None:
+@st.cache_data(ttl=1800, show_spinner=False)
+def sector_ratings(symbols: tuple, with_fund: bool) -> pd.DataFrame:
+    d = scan_data(symbols, with_fund)
+    if d is None:
         return pd.DataFrame()
-    return ratings.ratings(px_, scores_["Sector"], info_ if with_fund else None, data.risk_free_rate())
+    return ratings.ratings(d["px"], d["sectors"], d["info"] if with_fund else None, d["ef"] if with_fund else None)
 
 
 @st.cache_data(ttl=1800, show_spinner=False)
@@ -181,7 +181,7 @@ if use_fund and n_fund < 0.8 * len(scores):
                "so fundamental themes are missing for the rest. Re-run the scan in a few minutes to fill them in.")
 
 # Only the open tab runs, so the slower ones (the replay, the swing scan) cost nothing until opened.
-tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Could run", "Sector VST list", "Does the ranking work?"],
+tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Could run", "Shark Score list", "Does the ranking work?"],
                key="tp_view", on_change="rerun")
 
 
@@ -374,21 +374,18 @@ def could_run_tab():
                "before 2013, which flatters every row a little.")
 
 
-def vst_tab():
+def ratings_tab():
     st.markdown(
-        "<div class='sf-note'>SharkFin's versions of VectorVest's ratings, each ranked <b>within the stock's own sector</b> "
-        "on a 0-2 scale (1 = the sector's middle stock): <b>RV</b> value, <b>RT</b> price trend vs the market, "
-        "<b>RS</b> safety, <b>CI</b> comfort (avoiding deep declines) and <b>VST</b>, which combines RV, RT and RS. "
-        "<b>On their own the ratings barely predict next month's return.</b> What held up in the research was a steady "
-        "weekly list: the 20 highest VSTs among stocks with a steady past-year climb, re-checked each Friday, holding "
-        "a stock until it falls out of the top 60, and sitting in cash while the S&amp;P 500 is below its 10-month "
-        "average. That made 10-11% a year in every test period with a worst drop of 16%: steadier than "
-        "Leader Dip, not stronger.</div>", unsafe_allow_html=True)
+        "<div class='sf-note'><b>SharkFin Ratings</b> score each stock from 0 to 100 against the other stocks in its own "
+        "sector (50 = the sector's middle stock): <b>Value</b> (earnings and dividend yield), <b>Momentum</b> (the past "
+        "year's climb and how steady it was), <b>Earnings</b> (beating estimates), <b>Pullback</b> (last month's drop) "
+        "and <b>Risk</b> (volatility and worst drop). The <b>Shark Score</b> averages Value, Momentum and Earnings, the "
+        f"three that held up in both halves of the 2002-2026 test. {ratings.LIST_RESULT}</div>", unsafe_allow_html=True)
     if not use_fund:
-        st.info("Turn on **Include fundamentals and analyst data** above: RV needs each company's earnings.")
+        st.info("Turn on **Include fundamentals and earnings** above: Value and Earnings need each company's data.")
         return
-    rat = sector_ratings(tuple(syms), use_fund, tuple(sorted(tw.items())))
-    if rat.empty or rat["VST"].notna().sum() < 25:
+    rat = sector_ratings(tuple(syms), use_fund)
+    if rat.empty or rat["Shark Score"].notna().sum() < 25:
         st.info("Not enough company data came back to rate this list. Pick a bigger universe or re-run in a few minutes.")
         return
     reg = leader_dip.regime(market_close()) if len(market_close()) else {}
@@ -397,18 +394,20 @@ def vst_tab():
                    "until a month ends back above it.")
     elif reg.get("ten_month_on"):
         st.caption(f"The S&P 500 closed {reg['month_end']:%B} above its 10-month average, so the list is on.")
-    top = ratings.vst_list(rat, scores["fip"] if "fip" in scores else None)
+    cols = ["Shark Score", "Value", "Momentum", "Earnings", "Pullback", "Risk"]
+    top = ratings.score_list(rat)
     show = top.join(scores[["Name", "Sector", "Price"]], how="left")
-    cfg = {k: st.column_config.NumberColumn(ratings.NAMES[k], format="%.2f", help=ratings.HELP[k]) for k in ratings.NAMES}
-    st.dataframe(show[["Name", "Sector", "Price", "VST", "RV", "RT", "RS", "CI", "VST rank"]], width="stretch",
+    cfg = {k: st.column_config.ProgressColumn(ratings.NAMES[k], min_value=0, max_value=100, format="%.0f",
+                                              help=ratings.HELP[k]) for k in cols}
+    st.dataframe(show[["Name", "Sector", "Price", *cols, "List rank"]], width="stretch",
                  column_config={**cfg, "Price": st.column_config.NumberColumn(format="$%.2f"),
-                                "VST rank": st.column_config.NumberColumn("Rank in list", format="%d",
-                                                                          help="Sell a holding once it drops below 60th.")})
+                                "List rank": st.column_config.NumberColumn("Rank in list", format="%d",
+                                                                           help="Sell a holding once it drops below 60th.")})
     with st.expander("Every stock's ratings"):
-        allr = rat.join(scores[["Name", "Sector"]], how="left").sort_values("VST", ascending=False)
-        st.dataframe(allr[["Name", "Sector", "VST", "RV", "RT", "RS", "CI"]], width="stretch", height=420, column_config=cfg)
-    st.caption("Ratings use today's prices and Yahoo's latest company data. Research & Valuation shows the same ratings "
-               "for any single stock.")
+        allr = rat.join(scores[["Name", "Sector"]], how="left").sort_values("Shark Score", ascending=False)
+        st.dataframe(allr[["Name", "Sector", *cols]], width="stretch", height=420, column_config=cfg)
+    st.caption("Ratings use today's prices, Yahoo's latest company data and each company's earnings history. Research "
+               "& Valuation shows the same ratings for any single stock.")
 
 
 with tabs[0]:
@@ -482,7 +481,7 @@ with tabs[3]:
 
 with tabs[4]:
     if tabs[4].open is not False:
-        vst_tab()
+        ratings_tab()
 
 RESEARCH_TAKEAWAYS = [
     "<b>No ranking built from public data reliably picks S&amp;P 500 winners.</b> Over 2000-2026 we tested 50 signals "

@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from sharkfin import ai, catalysts, data, leader_dip, levels, ratings, risk, sentiment, swing, ui, valuation
+from sharkfin import ai, catalysts, data, factors, leader_dip, levels, ratings, risk, sentiment, swing, ui, valuation
 from sharkfin import indicators as ind
 from sharkfin.explain import tip
 
@@ -110,8 +110,8 @@ def sector_etf_prices() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def stock_ratings(symbol: str, stock_close: pd.Series, inf_: dict, bond: float) -> dict:
-    """RT, RS and CI ranked within the stock's S&P 500 sector; RV within its industry peers."""
+def stock_ratings(symbol: str, stock_close: pd.Series, inf_: dict) -> dict:
+    """Momentum, Pullback and Risk against the stock's S&P 500 sector; Value and Earnings against its industry peers."""
     px_, sec = index_panel()
     if px_.empty:
         return {}
@@ -120,19 +120,22 @@ def stock_ratings(symbol: str, stock_close: pd.Series, inf_: dict, bond: float) 
         panel = panel.join(stock_close.rename(symbol), how="left")
     if pd.isna(secs.get(symbol)):
         secs[symbol] = ratings.to_gics(inf_.get("sector"))
-    rat = ratings.ratings(panel, secs, None, bond)
+    rat = ratings.ratings(panel, secs)
     if symbol not in rat.index:
         return {}
-    row = rat.loc[symbol]
+    out = {k: float(rat.loc[symbol, k]) for k in ("Momentum", "Pullback", "Risk")}
     peers = data.peers_for(symbol, inf_)
     grp = pd.DataFrame([inf_], index=[symbol])
     if peers:
         grp = pd.concat([grp, data.infos(tuple(peers))])
-    rv_raw = ratings.graham_value(grp, bond)
-    rv = float(rv_raw.rank(pct=True)[symbol] * 2) if rv_raw.notna().sum() >= 5 and np.isfinite(rv_raw[symbol]) else np.nan
-    vst = float(np.sqrt((rv ** 2 + row["RT"] ** 2 + row["RS"] ** 2) / 3)) if np.isfinite(rv) else np.nan
-    return {"RV": rv, "RT": float(row["RT"]), "RS": float(row["RS"]), "CI": float(row["CI"]), "VST": vst,
-            "sector": secs.get(symbol), "n_sector": int((secs == secs.get(symbol)).sum()), "n_peers": int(rv_raw.notna().sum())}
+    pr = ratings.ratings(panel.reindex(columns=grp.index), None, grp,
+                         factors.earnings_factor_frame(data.earnings_histories(tuple(grp.index))))
+    for k in ("Value", "Earnings"):
+        v = pr[k].get(symbol, np.nan) if pr[k].notna().sum() >= 5 else np.nan
+        out[k] = float(v) if pd.notna(v) else np.nan
+    out["Shark Score"] = ratings.shark_score(out)
+    out.update(sector=secs.get(symbol), n_sector=int((secs == secs.get(symbol)).sum()), n_peers=len(grp))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -237,13 +240,13 @@ with tabs[0]:
 
     sc = ratings.sector_context(sym, hist["Close"], inf.get("sector"), sector_etf_prices(), idx_px, idx_sec)
     rat = stock_ratings(sym, hist["Close"], {k: inf.get(k) for k in (
-        "industry", "industryKey", "sector", "marketCap", "trailingEps", "earningsGrowth", "currentPrice",
-        "regularMarketPrice")}, data.risk_free_rate())
+        "industry", "industryKey", "sector", "marketCap", "trailingEps", "trailingPE", "dividendYield", "currentPrice",
+        "regularMarketPrice")})
     if sc or rat:
         st.subheader("Against its sector",
-                     help="Context, not a signal. In SharkFin's research none of these sector readings, and none of the "
-                          "ratings on their own, predicted the next month's return; they describe where the stock and its "
-                          "sector stand.")
+                     help="Context more than a signal. In SharkFin's research none of the sector readings predicted the "
+                          "next month's return, and the Shark Score only tilted the odds a little (its top fifth beat the "
+                          "average stock in 55-62% of months).")
     if sc:
         ui.metrics([
             {"label": f"{sc['gics']} ({sc['etf']}), 6 months", "value": ui.fmt_pct(sc["sector_6m"], 1, True),
@@ -259,12 +262,13 @@ with tabs[0]:
              "help": "The stock's 6-month gain minus its sector ETF's."},
         ], key="sector")
     if rat:
-        ui.metrics([{"label": ratings.NAMES[k], "value": ui.fmt_num(rat.get(k)), "help": ratings.HELP[k]}
-                    for k in ("VST", "RV", "RT", "RS", "CI")], key="vv")
-        st.caption(f"VectorVest-style ratings, 0 to 2, where 1 is the middle of the sector. RT, RS and CI are ranked "
-                   f"against the {rat['n_sector']} S&P 500 stocks in {rat['sector'] or 'its sector'}; RV against "
-                   f"{max(rat['n_peers'] - 1, 0)} industry peers. On their own they barely predicted the next month; "
-                   "Top Performers → Sector VST list shows the weekly list that held up.")
+        ui.metrics([{"label": ratings.NAMES[k], "value": f"{rat[k]:.0f}" if np.isfinite(rat.get(k, np.nan)) else None,
+                     "help": ratings.HELP[k]} for k in ("Shark Score", "Value", "Momentum", "Earnings", "Pullback", "Risk")],
+                   key="sharkratings")
+        st.caption(f"SharkFin Ratings, 0 to 100, where 50 is the middle of the sector. Momentum, Pullback and Risk are "
+                   f"ranked against the {rat['n_sector']} S&P 500 stocks in {rat['sector'] or 'its sector'}; Value and "
+                   f"Earnings against {max(rat['n_peers'] - 1, 0)} industry peers. Top Performers → Shark Score list "
+                   "ranks a whole index.")
     if inf.get("longBusinessSummary"):
         with st.expander("What the company does"):
             st.write(inf["longBusinessSummary"])
