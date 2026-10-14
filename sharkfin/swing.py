@@ -1,6 +1,8 @@
-"""Which swing strategy the app uses: Leader Dip by default, a Strategy Lab template, or the user's own rules.
+"""Which swing strategy the app uses: Leader Dip Plus 7 by default, Tech Breakout Rider, a Strategy Lab template,
+or the user's own rules.
 
-Leader Dip has its own module (it ranks stocks against the whole S&P 500 and uses a limit entry). Every other
+The two researched strategies have their own modules (``leader_dip`` and ``breakout_rider``: they rank stocks
+against a whole index and use limit entries). Every other
 choice is a Strategy Lab rule set run through ``builder``, so the same rules give the same signals on Top
 Performers, Research and in the Strategy Lab backtest.
 """
@@ -11,23 +13,29 @@ import pandas as pd
 
 from . import builder
 
-LEADER_DIP = "Leader Dip"
+LEADER_DIP = "Leader Dip Plus 7"
+BREAKOUT = "Tech Breakout Rider"
+RESEARCHED = (LEADER_DIP, BREAKOUT)
 MINE = "My Strategy Lab strategy"
 # Templates that trade in and out over days to weeks (the long-hold trend templates are left out).
 TEMPLATE_CHOICES = ["RSI dip in an uptrend", "Bollinger bounce", "Pullback in an uptrend", "Volume breakout",
                     "MACD momentum", "55-day breakout"]
 ABOUT = {
     LEADER_DIP: "SharkFin's researched default. Buys a sharp two-day drop in one of the S&P 500's strongest stocks "
-                "while the market is in an uptrend and sells into the bounce. It had the best risk-adjusted record of "
-                "every swing system tested (2000-2026).",
+                "while the market is in an uptrend and sells into the bounce, usually within a week. 33% a year with a "
+                "1.40 Sharpe over the last 5 years in SharkFin's research (Strategy Playbook has the details).",
+    BREAKOUT: "SharkFin's researched tech trend system. Buys a tech leader breaking out to a new 20-day high while "
+              "QQQ is trending up, and rides it until its 21-day EMA crosses under the 50-day (about 2 months). 34% "
+              "a year over the last 5 years in SharkFin's research, with bigger swings.",
     MINE: "The rules you saved from Strategy Lab → Build and test.",
 }
-NOTE_UNTESTED = ("This strategy has not been through SharkFin's 2000-2026 portfolio test (Leader Dip has). The backtest "
+NOTE_UNTESTED = ("This strategy has not been through SharkFin's portfolio research (Leader Dip Plus 7 and Tech Breakout "
+                 "Rider have). The backtest "
                  "below shows how it would have traded this one stock.")
 
 
 def choices(mine: dict | None = None) -> list[str]:
-    return [LEADER_DIP, *TEMPLATE_CHOICES, *([MINE] if mine else [])]
+    return [LEADER_DIP, BREAKOUT, *TEMPLATE_CHOICES, *([MINE] if mine else [])]
 
 
 def about(name: str) -> str:
@@ -37,8 +45,8 @@ def about(name: str) -> str:
 
 
 def rules(name: str, mine: dict | None = None) -> dict | None:
-    """The builder rule set for a choice (None for Leader Dip, which has its own engine)."""
-    if name == LEADER_DIP:
+    """The builder rule set for a choice (None for the researched strategies, which have their own engines)."""
+    if name in RESEARCHED:
         return None
     if name == MINE:
         return clean(mine) if mine else None

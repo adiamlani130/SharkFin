@@ -133,6 +133,9 @@ def history(symbol: str, period: str = "5y", interval: str = "1d") -> pd.DataFra
         log.warning("history(%s) failed: %s", symbol, e)
         return pd.DataFrame()
     if df is None or df.empty:
+        # Yahoo sometimes blocks cloud servers: fall back to Alpaca's daily bars when keys are set.
+        if interval == "1d" and alpaca_keys() and not symbol.startswith("^") and "=" not in symbol:
+            return alpaca_daily(symbol, period)
         return pd.DataFrame()
     df.index = _naive(df.index)
     return df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]].dropna(subset=["Close"])
@@ -726,3 +729,152 @@ def sec_document_text(url: str) -> str:
 def market_history(period: str = "10y") -> pd.DataFrame:
     """SPY history, used as the market-uptrend filter."""
     return history("SPY", period)
+
+
+# ---------------------------------------------------------------------------
+# Alpaca (optional): intraday bars, live trades and a daily-price fallback
+# ---------------------------------------------------------------------------
+
+ALPACA_DATA = "https://data.alpaca.markets/v2"
+_PERIOD_DAYS = {"5d": 7, "1mo": 31, "3mo": 92, "6mo": 183, "1y": 366, "2y": 731, "5y": 1827, "10y": 3653, "max": 7300}
+
+
+def alpaca_keys() -> tuple[str, str] | None:
+    """Alpaca market-data keys from the environment or Streamlit secrets (ALPACA_API_KEY / ALPACA_SECRET_KEY).
+    SharkFin only reads market data with them; it never places orders."""
+    import os
+
+    pairs = (("ALPACA_API_KEY", "ALPACA_SECRET_KEY"), ("APCA_API_KEY_ID", "APCA_API_SECRET_KEY"))
+    for k, s in pairs:
+        if os.environ.get(k) and os.environ.get(s):
+            return os.environ[k], os.environ[s]
+    try:
+        import streamlit as st
+
+        for k, s in pairs:
+            if st.secrets.get(k) and st.secrets.get(s):  # type: ignore[attr-defined]
+                return str(st.secrets[k]), str(st.secrets[s])
+    except Exception:
+        pass
+    return None
+
+
+def _alpaca_get(path: str, params: dict) -> dict:
+    import requests
+
+    keys = alpaca_keys()
+    if not keys:
+        return {}
+    for attempt in range(4):
+        try:
+            r = requests.get(f"{ALPACA_DATA}{path}", params=params, timeout=30,
+                             headers={"APCA-API-KEY-ID": keys[0], "APCA-API-SECRET-KEY": keys[1]})
+            if r.status_code == 429 or r.status_code >= 500:
+                time.sleep(2 * (attempt + 1))
+                continue
+            if r.status_code >= 400:
+                log.warning("Alpaca %s -> %s %s", path, r.status_code, r.text[:200])
+                return {}
+            return r.json()
+        except Exception as e:  # pragma: no cover - network
+            log.warning("Alpaca %s failed: %s", path, e)
+            time.sleep(1 + attempt)
+    return {}
+
+
+def alpaca_bars(symbol: str, timeframe: str, start: datetime, end: datetime | None = None, feed: str = "sip",
+                adjustment: str = "all") -> pd.DataFrame:
+    """Bars from Alpaca as a DataFrame (o, h, l, c, v, vw) indexed by New York time (bar start).
+
+    Intraday pages hold only about a month each, so long ranges are split into quarters fetched in parallel."""
+    utc = lambda d: pd.Timestamp(d).tz_convert("UTC") if pd.Timestamp(d).tzinfo else pd.Timestamp(d).tz_localize("UTC")
+    t0, t1 = utc(start), utc(end) if end is not None else pd.Timestamp.now(tz="UTC")
+    edges = [t0]
+    while timeframe != "1Day" and edges[-1] + pd.Timedelta(days=92) < t1:
+        edges.append(edges[-1] + pd.Timedelta(days=92))
+    edges.append(t1)
+
+    def chunk(a: pd.Timestamp, b: pd.Timestamp) -> list:
+        params = {"timeframe": timeframe, "start": a.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                  "end": b.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000, "feed": feed, "adjustment": adjustment}
+        rows, token = [], None
+        for _ in range(500):
+            if token:
+                params["page_token"] = token
+            j = _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params)
+            if not j and token:  # a failed page: try it once more rather than return a silently cut-off history
+                j = _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params)
+            rows += j.get("bars") or []
+            token = j.get("next_page_token")
+            if not token:
+                break
+        return rows
+
+    spans = list(zip(edges[:-1], edges[1:]))
+    if len(spans) == 1:
+        rows = chunk(*spans[0])
+    else:
+        with ThreadPoolExecutor(max_workers=6) as ex:
+            rows = [r for part in ex.map(lambda ab: chunk(*ab), spans) for r in part]
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df.index = pd.to_datetime(df.pop("t"), utc=True).dt.tz_convert("America/New_York")
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    return df[[c for c in ("o", "h", "l", "c", "v", "vw") if c in df.columns]].astype(float)
+
+
+@ttl_cache(6 * 3600)
+def alpaca_daily(symbol: str, period: str = "5y") -> pd.DataFrame:
+    """Split- and dividend-adjusted daily bars from Alpaca, shaped like ``history``."""
+    start = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=_PERIOD_DAYS.get(period, 1827))
+    end = pd.Timestamp.now(tz="UTC") - pd.Timedelta(minutes=16)  # the free plan has no SIP data in the last 15 minutes
+    df = alpaca_bars(symbol, "1Day", start, end)
+    if df.empty:
+        return df
+    df.index = df.index.tz_localize(None).normalize()
+    return df.rename(columns={"o": "Open", "h": "High", "l": "Low", "c": "Close", "v": "Volume"})[
+        ["Open", "High", "Low", "Close", "Volume"]]
+
+
+@ttl_cache(1800)
+def intraday_bars(symbol: str, days: int = 60) -> pd.DataFrame:
+    """30-minute regular-session bars (o, h, l, c, v, vw; New York time); ``.attrs["source"]`` says where they
+    came from.
+
+    Alpaca (with keys) has years of history; without keys Yahoo has the last 60 days, and its bars carry no
+    VWAP, so the typical price stands in for it."""
+    if alpaca_keys():
+        now = pd.Timestamp.now(tz="UTC")
+        df = alpaca_bars(symbol, "30Min", now - pd.Timedelta(days=days), now - pd.Timedelta(minutes=16))
+        if not df.empty:
+            return _session(df, "Alpaca (SIP feed)")
+    try:
+        raw = _yf().Ticker(symbol).history(period=f"{min(days, 59)}d", interval="30m", auto_adjust=True, prepost=False)
+    except Exception as e:  # pragma: no cover - network
+        log.warning("intraday %s failed: %s", symbol, e)
+        raw = None
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    idx = raw.index.tz_convert("America/New_York") if raw.index.tz is not None else raw.index.tz_localize("America/New_York")
+    df = pd.DataFrame({"o": raw["Open"], "h": raw["High"], "l": raw["Low"], "c": raw["Close"],
+                       "v": raw["Volume"].astype(float)}, index=idx)
+    df["vw"] = (df["h"] + df["l"] + df["c"]) / 3
+    return _session(df, "Yahoo (last 60 days only)")
+
+
+def _session(df: pd.DataFrame, source: str) -> pd.DataFrame:
+    m = df.index.hour * 60 + df.index.minute
+    out = df[(m >= 570) & (m < 960)].copy()
+    out.attrs["source"] = source
+    return out
+
+
+@ttl_cache(60)
+def latest_trade(symbol: str) -> dict:
+    """The latest trade (price and time) from Alpaca's real-time IEX feed, or {} without keys."""
+    j = _alpaca_get(f"/stocks/{symbol}/trades/latest", {"feed": "iex"})
+    t = j.get("trade") or {}
+    if not t.get("p"):
+        return {}
+    return {"price": float(t["p"]), "time": pd.Timestamp(t["t"]).tz_convert("America/New_York")}

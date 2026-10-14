@@ -8,7 +8,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import builder, catalysts, data, factors, leader_dip, ratings, risk, swing, ui
+from sharkfin import breakout_rider, builder, catalysts, data, factors, leader_dip, live, ratings, risk, swing, ui
 from sharkfin.explain import tip
 
 ui.header("Top Performers",
@@ -135,7 +135,7 @@ def sector_ratings(symbols: tuple, with_fund: bool) -> pd.DataFrame:
 
 @st.cache_data(ttl=1800, show_spinner=False)
 def log_prices(symbols: tuple) -> dict:
-    return data.download_ohlcv(symbols, period="6mo")
+    return data.download_ohlcv(symbols, period="1y")  # a year, so the 200-day exit can be checked
 
 
 syms = get_universe(uni_name)
@@ -206,7 +206,8 @@ def log_signals(today: pd.DataFrame, asof, market_ok: bool | None):
     seen = {(r.get("Date"), r.get("Symbol")) for r in log}
     day = f"{pd.Timestamp(asof):%Y-%m-%d}"
     new = [{"Date": day, "Symbol": sym_, "Close": round(float(r_["Price"]), 4), "Limit": round(float(r_["Limit"]), 4),
-            "RSI2": round(float(r_["RSI2"]), 1), "Strength": round(float(r_["Strength"]), 3), "Market on": market_ok}
+            "RSI2": round(float(r_["RSI2"]), 1), "Strength": round(float(r_["Strength"]), 3), "Market on": market_ok,
+            **({"Target": round(float(r_["Target"]), 4)} if pd.notna(r_.get("Target")) else {})}
            for sym_, r_ in today.iterrows() if (day, sym_) not in seen]
     if new:
         ui.save_list(LOG, log + new)
@@ -214,22 +215,29 @@ def log_signals(today: pd.DataFrame, asof, market_ok: bool | None):
 
 def leader_dip_tab():
     st.markdown(
-        "<div class='sf-note'><b>Leader Dip</b> buys a sharp two-day drop in one of the market's strongest stocks while "
-        "the market is in an uptrend, and sells into the bounce. A stock signals when its <b>2-day RSI is below 10</b>, "
-        "it is <b>above its 200-day average</b>, and its <b>6-month gain beats 70% of the S&amp;P 500</b>. "
-        f"{ui.h(leader_dip.ENTRY_RULE)} {ui.h(leader_dip.EXIT_RULE)}</div>", unsafe_allow_html=True)
-    mc = market_close()
-    m_on = leader_dip.market_on(mc)
-    switch = bool(m_on.iloc[-1]) if len(m_on) else None
+        "<div class='sf-note'><b>Leader Dip Plus 7</b> buys a sharp two-day drop in one of the market's strongest "
+        "stocks and sells into the bounce. A stock signals when its <b>2-day RSI is below 10</b>, it is <b>above its "
+        "200-day average</b>, its <b>6-month gain beats 70% of the S&amp;P 500</b>, and it has at least one "
+        f"<b>quality point</b>. {ui.h(leader_dip.QUALITY_RULE)} {ui.h(leader_dip.ENTRY_RULE)} "
+        f"{ui.h(leader_dip.EXIT_RULE)} Strategy Playbook explains why it works.</div>", unsafe_allow_html=True)
+    sw = live.switches().get("leader_dip", {})
+    switch = sw.get("on")
     ref = sp500_gains()
-    now = leader_dip.latest(px, ref if len(ref) else None)
+    ohlc = universe_ohlcv(tuple(px.columns))
+    m = live.market_inputs()
+    if "Close" in ohlc and not ohlc["Close"].empty:
+        now = leader_dip.latest(ohlc["Close"], ref if len(ref) else None, ohlc=ohlc,
+                                vix=m["vix"] if len(m["vix"]) else None, sector_ret3=live.sector_ret3(ohlc))
+    else:
+        now = leader_dip.latest(px, ref if len(ref) else None)
     asof = px.index[-1]
     sig = now[now["Signal"]].sort_values("6-month gain", ascending=False)
     if switch is False:
-        st.warning("Market switch is **off**: SPY closed below its 200-day average, so the system places no new trades. "
-                   "Signals below are for reference only.")
-    st.caption(f"Signals at the {asof:%b %d, %Y} close, strongest first. Leader Dip holds up to {leader_dip.SLOTS} "
-               "trades at once, so with more signals than free slots, take them from the top.")
+        st.warning("Market switch is **off**: SPY closed below its 200-day average and VIX is under 25, so the system "
+                   "places no new trades. Signals below are for reference only.")
+    st.caption(f"Signals at the {asof:%b %d, %Y} close, strongest first. Leader Dip Plus 7 holds up to "
+               f"{leader_dip.SLOTS} trades at once, so with more signals than free slots, take them from the top. Idle "
+               "cash sits in SPY while SPY is above its 200-day.")
     if sig.empty:
         st.info("No stock in this list signalled at the last close. Leader Dip fires on only a few stocks a week, and "
                 "less often in calm, rising markets.")
@@ -237,16 +245,25 @@ def leader_dip_tab():
         if switch is not False:
             log_signals(sig, asof, switch)
         show = sig.join(scores[["Name", "Sector"]], how="left")
-        st.dataframe(show[["Name", "Price", "Limit", "RSI2", "vs 200-day", "6-month gain", "Strength", "Sector"]],
-                     width="stretch", column_config={
+        cols = [c for c in ("Name", "Price", "Limit", "Target", "RSI2", "Quality points", "6-month gain", "Strength",
+                            "Sector") if c in show]
+        st.dataframe(show[cols], width="stretch", column_config={
                          "Price": st.column_config.NumberColumn("Close", format="$%.2f"),
                          "Limit": st.column_config.NumberColumn("Limit buy (next session)", format="$%.2f",
                                                                 help=tip("ld_limit")),
+                         "Target": st.column_config.NumberColumn("Profit target", format="$%.2f",
+                                                                 help="Signal close + 1.5 ATR. Once filled, place a "
+                                                                      "sell limit here."),
                          "RSI2": st.column_config.NumberColumn("2-day RSI", format="%.1f", help=tip("ld_rsi2")),
-                         "vs 200-day": st.column_config.NumberColumn(format="percent"),
+                         "Quality points": st.column_config.TextColumn(help=leader_dip.QUALITY_RULE),
                          "6-month gain": st.column_config.NumberColumn(format="percent"),
                          "Strength": st.column_config.ProgressColumn("Strength rank", min_value=0, max_value=1,
                                                                      format="percent", help=tip("ld_strength"))})
+    if "Base signal" in now:
+        skipped = now[now["Base signal"] & ~now["Signal"]]
+        if len(skipped):
+            st.caption(f"Skipped for having no quality point (an ordinary wobble, not a real flush): "
+                       f"{', '.join(skipped.index[:12])}.")
     near = now[now["Uptrend"] & now["Leader"] & ~now["Signal"] & (now["RSI2"] < 30)].sort_values("RSI2")
     if len(near):
         with st.expander(f"Dips forming ({len(near)}): leaders in an uptrend with a 2-day RSI under 30"):
@@ -261,7 +278,7 @@ def leader_dip_tab():
     with st.expander(f"Signal log ({len(log)} signals saved)", expanded=False):
         st.caption("Every signal this page shows while the market switch is on is saved here, then checked against what "
                    "happened next: did the limit fill, and how did the trade end under the exit rules? Over time this "
-                   "shows whether live results match the backtest (about 67% winners, +1.4% a trade, ~6-day holds).")
+                   "shows whether live results match the research (about 64% winners, +1.7% a trade, ~5-day holds).")
         if log.empty:
             st.caption("Nothing logged yet.")
             return
@@ -276,14 +293,15 @@ def leader_dip_tab():
              "help": "Share of signals where the next day's low reached the limit price."},
             {"label": "Closed trades", "value": f"{len(closed)}"},
             {"label": "Winning trades", "value": ui.fmt_pct((closed["Return"] > 0).mean(), 0) if len(closed) else None,
-             "help": "Backtest: about 67%."},
+             "help": "Research: about 64%."},
             {"label": "Avg trade", "value": ui.fmt_pct(closed["Return"].mean(), 1, True) if len(closed) else None,
-             "help": "Before costs. Backtest: about +1.4% after costs."},
+             "help": "Before costs. Research: about +1.7% after costs."},
         ], key="ldlog")
         st.dataframe(fu.iloc[::-1], hide_index=True, width="stretch", column_config={
             "Date": st.column_config.TextColumn("Signal date"),
             "Close": st.column_config.NumberColumn(format="$%.2f"),
             "Limit": st.column_config.NumberColumn(format="$%.2f"),
+            "Target": st.column_config.NumberColumn(format="$%.2f"),
             "Strength": st.column_config.NumberColumn(format="percent"),
             "Fill price": st.column_config.NumberColumn(format="$%.2f"),
             "Exit date": st.column_config.DateColumn(format="MMM D, YYYY"),
@@ -292,6 +310,46 @@ def leader_dip_tab():
         st.download_button("Download the log (CSV)", fu.to_csv(index=False).encode(), "leader_dip_log.csv", "text/csv")
         st.caption("The log is saved on the server next to your watchlist. A redeploy of the app can clear it, so "
                    "download a copy now and then.")
+
+
+def breakout_tab():
+    st.markdown(
+        f"<div class='sf-note'><b>Tech Breakout Rider</b> trades S&amp;P 500 tech and communication stocks plus AMZN "
+        f"and TSLA, whatever list is picked above. {ui.h(breakout_rider.ENTRY_RULE)} {ui.h(breakout_rider.EXIT_RULE)} "
+        "Strategy Playbook explains why it works.</div>", unsafe_allow_html=True)
+    with st.spinner("Checking tech stocks for breakouts…"):
+        now = live.breakout_today()
+    if now.empty:
+        st.warning("Couldn't download the tech stocks right now. Try again shortly.")
+        return
+    if now.attrs.get("gate_on") is False:
+        st.warning("The tech switch is **off** (QQQ's 21-day EMA is under its 50-day), so the system places no new "
+                   "trades. Signals below are for reference only.")
+    sig = now[now["Signal"]].sort_values("1-month gain", ascending=False)
+    names = data.sp500_table().set_index("Symbol")
+    nm = names[["Name"]] if "Name" in names else pd.DataFrame(index=now.index)
+    cfg = {"Price": st.column_config.NumberColumn("Close", format="$%.2f"),
+           "Limit": st.column_config.NumberColumn("Limit buy (next session)", format="$%.2f"),
+           "20-day high": st.column_config.NumberColumn("Prior 20-day high", format="$%.2f"),
+           "ADX": st.column_config.NumberColumn(format="%.0f"),
+           "1-month gain": st.column_config.NumberColumn(format="percent"),
+           "vs 20-day high": st.column_config.NumberColumn(format="percent"),
+           "Strength": st.column_config.ProgressColumn("Strength vs tech", min_value=0, max_value=1, format="percent")}
+    st.caption(f"Signals at the last close, biggest 1-month gainers first. The system holds up to "
+               f"{breakout_rider.SLOTS} positions for about 2 months each.")
+    if sig.empty:
+        st.info("No tech stock broke out under every rule at the last close.")
+    else:
+        show = sig.join(nm, how="left")
+        st.dataframe(show[[c for c in ("Name", "Price", "Limit", "20-day high", "ADX", "1-month gain", "Strength")
+                           if c in show]], width="stretch", column_config=cfg)
+    near = now[~now["Signal"] & (now["Strength"] >= breakout_rider.STRENGTH_MIN) & (now["vs 20-day high"] > -0.03)
+               & now["Trend intact"]].sort_values("vs 20-day high", ascending=False)
+    if len(near):
+        with st.expander(f"Near a breakout ({len(near)}): tech leaders within 3% of their 20-day high"):
+            show = near.join(nm, how="left")
+            st.dataframe(show[[c for c in ("Name", "Price", "20-day high", "vs 20-day high", "ADX", "Strength")
+                               if c in show]], width="stretch", column_config=cfg)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -311,6 +369,9 @@ def swing_tab():
     c2.caption(swing.about(name))
     if name == swing.LEADER_DIP:
         leader_dip_tab()
+        return
+    if name == swing.BREAKOUT:
+        breakout_tab()
         return
     rules_ = swing.rules(name, ui.my_swing_rules())
     if not rules_ or not rules_.get("entry"):
