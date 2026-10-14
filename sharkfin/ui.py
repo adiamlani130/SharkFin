@@ -130,6 +130,20 @@ div[class*="st-key-sfrule"] [data-testid="stHorizontalBlock"] {flex-wrap: wrap; 
 [data-testid="stSidebarNav"] a span {font-size: .92rem;}
 [data-testid="stCaptionContainer"] {color: #8b95a7;}
 .sf-tape {white-space: nowrap; overflow: hidden; border-bottom: 1px solid #1f2836; padding: 6px 0 10px 0; margin-bottom: 8px;}
+/* ---------- strategy playbook ---------- */
+.sf-strats {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .7rem; margin-bottom: .6rem;}
+@container (max-width: 1000px) {.sf-strats {grid-template-columns: repeat(2, minmax(0, 1fr));}}
+@container (max-width: 560px) {.sf-strats {grid-template-columns: minmax(0, 1fr);}}
+.sf-strat {background: linear-gradient(160deg, #131b27 0%, #0f141c 100%); border: 1px solid #1f2836;
+  border-top: 3px solid var(--c); border-radius: 12px; padding: 13px 15px;}
+.sf-strat .nm {font-weight: 650; color: #e6e9ef; font-size: .98rem;}
+.sf-strat .tg {color: var(--c); font-size: .7rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; margin-top: 2px;}
+.sf-strat .big {font-size: 1.6rem; font-weight: 700; color: #e6e9ef; letter-spacing: -0.02em; margin-top: 6px;}
+.sf-strat .big span {font-size: .8rem; color: #8b95a7; font-weight: 500;}
+.sf-strat .sub {color: #aab3c2; font-size: .78rem;}
+.sf-strat .bl {color: #8b95a7; font-size: .8rem; margin-top: 7px; line-height: 1.45;}
+.sf-steps {margin: 8px 0 0 0; padding-left: 1.2rem; font-size: .87rem; color: #c9d1dc; line-height: 1.55;}
+.sf-steps li {margin-bottom: 6px;} .sf-steps b {color: #e6e9ef;}
 </style>
 """
 

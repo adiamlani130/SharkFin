@@ -9,7 +9,7 @@ from sharkfin import data
 from tests import fakes
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGES = ["home", "research", "predictions", "scanner", "portfolio", "strategy_lab", "news"]
+PAGES = ["home", "research", "predictions", "scanner", "portfolio", "strategy_lab", "news", "playbook"]
 
 RUNNER = """
 import runpy, streamlit as st
@@ -152,7 +152,7 @@ def test_research_trade_setup_tab():
     _ok(at)
     labels = {m.label for m in at.metric}
     assert "Fair value" in labels
-    assert {"2-day RSI", "vs 200-day average", "6-month strength", "Market switch", "Swing (Leader Dip)"}.issubset(labels)
+    assert {"2-day RSI", "vs 200-day average", "6-month strength", "Market switch", "Profit target", "Swing (Leader Dip Plus 7)"}.issubset(labels)
     assert any("vs its sector" in lab for lab in labels) and {"Shark Score", "Value", "Risk"}.issubset(labels)
 
 
@@ -160,8 +160,8 @@ def test_scanner_shows_signals_and_logs_them(monkeypatch, tmp_path):
     from sharkfin import leader_dip
     real = leader_dip.latest
 
-    def forced(close, ref=None):
-        out = real(close, ref)
+    def forced(close, ref=None, **kw):
+        out = real(close, ref, **kw)
         out.loc[out.index[:2], "Signal"] = True  # make sure the table and the log have rows
         return out
     monkeypatch.setattr(leader_dip, "latest", forced)
@@ -204,9 +204,12 @@ def test_swing_choice_follows_the_user_across_pages(tmp_path):
     _ok(rs)
     labels = {m.label for m in rs.metric}
     assert "Swing (Volume breakout)" in labels and "Trades (5 years)" in labels
-    rs.selectbox(key="swing_pick_rs").set_value("Leader Dip").run()
+    rs.selectbox(key="swing_pick_rs").set_value("Leader Dip Plus 7").run()
     _ok(rs)
-    assert "Swing (Leader Dip)" in {m.label for m in rs.metric}
+    assert "Swing (Leader Dip Plus 7)" in {m.label for m in rs.metric}
+    rs.selectbox(key="swing_pick_rs").set_value("Tech Breakout Rider").run()
+    _ok(rs)
+    assert {"ADX (14)", "Tech switch"}.issubset({m.label for m in rs.metric})
 
 
 def test_strategy_lab_saves_my_swing_strategy(tmp_path):
@@ -217,3 +220,19 @@ def test_strategy_lab_saves_my_swing_strategy(tmp_path):
     rs = _page("research")
     _ok(rs)
     assert "Swing (My Strategy Lab strategy)" in {m.label for m in rs.metric}
+
+
+def test_playbook_every_view_and_scan():
+    at = _page("playbook")
+    _ok(at)
+    for view in ("Leader Dip Plus 7", "Tech Breakout Rider", "TQQQ Day + Night", "The combined plan"):
+        at.session_state["pb_view"] = view
+        at.run()
+        _ok(at)
+        for b in [b for b in at.button if b.key in ("pb_ld_scan", "pb_br_scan", "pb_ld_run", "pb_br_run", "pb_dn_run")]:
+            b.click().run()
+            _ok(at)
+        if view == "TQQQ Day + Night":
+            assert any(m.label == "Session VWAP" for m in at.metric)
+    labels = {m.label for m in at.metric}
+    assert {"Return per year", "Sharpe ratio", "Worst drop"}.issubset(labels)

@@ -1,26 +1,31 @@
-"""Leader Dip: SharkFin's swing system.
+"""Leader Dip Plus 7: SharkFin's swing system (revamped Oct 2026).
 
-Buy a short, sharp dip in one of the market's strongest stocks while the
-market itself is in an uptrend, and sell into the bounce.
+Buy a short, sharp dip in one of the market's strongest stocks while the market itself is healthy, take
+profits into the bounce, and keep the rest of the money working in SPY.
 
-  Signal, at the close: the 2-day RSI is below 10, the stock closes above its
-  200-day average, and its 6-month gain is in the top 30% of the S&P 500.
-  New trades are only placed while SPY closes above its own 200-day average.
-  Entry, the next day: a limit order 3% under the signal close. It fills only
-  if the day's low reaches the limit, at the open when the stock opens below it.
-  Exit: at the next open after the 2-day RSI closes above 70, or after 10
-  trading days. There is no stop loss.
-  Portfolio: 10 equal slots. When more stocks signal than there are free slots,
-  the biggest 6-month gainers go first.
+  Signal, at the close: the 2-day RSI is below 10, the stock closes above its 200-day average, its 6-month
+  gain is in the top 30% of the S&P 500, and at least one "quality point" says the dip is a real flush:
+    * a deep dip: the close is 2.5+ ATRs under its 10-day high
+    * off the high: the close is more than 10% under its 52-week high
+    * a sector-wide dip: the stock's sector ETF fell 2%+ over 3 days
+    * fear: VIX closed above 20
+  New trades are only placed while SPY closes above its 200-day average, or during a panic (VIX above 25).
+  Entry, the next day: a limit order 3% under the signal close. It fills only if the day's low reaches the
+  limit, at the open when the stock opens below it.
+  Exit: a profit target at the signal close + 1.5 ATR (sell limit, good until it fills), or at the next open
+  after the 2-day RSI closes above 70, after a close under the 200-day average, or after 10 trading days.
+  There is no stop loss.
+  Portfolio: 7 equal slots, biggest 6-month gainers first. Money not in trades sits in SPY while SPY closed
+  above its 200-day the day before, and in T-bills otherwise.
 
-In SharkFin's Oct 2026 research (point-in-time S&P 500 members, 0.1% cost per
-side) these rules made 12.7% a year in 2013-26 with a Sharpe ratio of 1.02,
-and won on 67% of trades. The settings were picked after seeing the data, so
-the median of 576 nearby variants (9.9% a year, Sharpe 0.78) is the fairer
-expectation.
+SharkFin's Oct 2026 research (point-in-time S&P 500 members, 0.1% cost per side), settings picked on 2013-20
+and graded on Oct 2021 - Oct 2026: 33.1% a year, Sharpe 1.40 (after T-bills), worst drop 18%, 64% of trades
+won, +1.7% a trade. SPY made 13.9% a year with a 25% worst drop. With slightly worse fills it made 28.7% a
+year, so 20-28% a year is the realistic plan.
 
-Everything is computed from data up to the signal close, and fills only use
-the next day's open and low, so there is no look-ahead.
+The original rules ("Classic": no quality points, no target or 200-day exit, SPY-only switch, 10 slots, cash
+in T-bills) stay available for comparison. Everything is computed from data up to the signal close, and
+fills only use later bars, so there is no look-ahead.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
+from . import swing_engine
 
 RSI_DAYS = 2
 BUY_BELOW = 10.0
@@ -38,23 +44,47 @@ STRENGTH_DAYS = 126
 STRENGTH_MIN = 0.70
 LIMIT = 0.97
 MAX_DAYS = 10
-SLOTS = 10
 COST_BPS = 10.0
 
-EXIT_RULE = (f"Sell at the next open once the 2-day RSI closes above {SELL_ABOVE:.0f}, or after {MAX_DAYS} trading days. "
-             "No stop loss.")
+# Plus
+SLOTS = 7
+TARGET_ATR = 1.5
+ATR_DAYS = 14
+PANIC_VIX = 25.0
+DEEP_DIP_ATR = 2.5
+OFF_HIGH = 0.10
+SECTOR_DROP = -0.02
+FEAR_VIX = 20.0
+
+CLASSIC_SLOTS = 10
+RULESETS = {"Leader Dip Plus 7": "plus", "Classic Leader Dip": "classic"}
+
+EXIT_RULE = (f"Sell at the profit target (signal close + {TARGET_ATR:g} ATR), or at the next open once the 2-day RSI "
+             f"closes above {SELL_ABOVE:.0f}, the stock closes under its 200-day average, or after {MAX_DAYS} trading "
+             "days. No stop loss.")
+CLASSIC_EXIT_RULE = (f"Sell at the next open once the 2-day RSI closes above {SELL_ABOVE:.0f}, or after {MAX_DAYS} "
+                     "trading days. No stop loss.")
 ENTRY_RULE = (f"Limit buy at {LIMIT:.0%} of the signal close for the next day only. It fills if the day's low reaches "
               "the limit; if the stock opens below it, you get the open.")
+QUALITY_RULE = ("Needs at least one quality point: a deep dip (2.5+ ATRs under the 10-day high), more than 10% under "
+                "the 52-week high, the sector ETF down 2%+ in 3 days, or VIX above 20.")
 
 CASH_CHOICES = {
-    "T-bills": "tbills",
     "SPY while SPY is above its 200-day": "spy_trend",
+    "T-bills": "tbills",
     "SPY always": "spy",
 }
-CASH_HELP = ("Where money waits when fewer than 10 trades are open. T-bills earn the 3-month Treasury rate. "
-             "'SPY while above its 200-day' holds the S&P 500 ETF whenever SPY closed above its 200-day average the "
-             "day before, and T-bills otherwise; it was the best mix in the research. 'SPY always' never leaves the "
-             "market, so it also takes the market's crashes.")
+CASH_HELP = ("Where money waits when not every slot is in a trade. 'SPY while above its 200-day' (Plus 7's setting) "
+             "holds the S&P 500 ETF whenever SPY closed above its 200-day average the day before, and T-bills "
+             "otherwise. It turned 25% a year into 33% in the research, but it also adds the market's swings. "
+             "T-bills earn the 3-month Treasury rate. 'SPY always' never leaves the market, so it takes the crashes too.")
+
+GICS_ETF = {"Information Technology": "XLK", "Financials": "XLF", "Health Care": "XLV", "Consumer Discretionary": "XLY",
+            "Communication Services": "XLC", "Industrials": "XLI", "Consumer Staples": "XLP", "Energy": "XLE",
+            "Utilities": "XLU", "Real Estate": "XLRE", "Materials": "XLB",
+            # Yahoo's sector names
+            "Technology": "XLK", "Financial Services": "XLF", "Healthcare": "XLV", "Consumer Cyclical": "XLY",
+            "Consumer Defensive": "XLP", "Basic Materials": "XLB"}
 
 
 # ---------------------------------------------------------------------------
@@ -77,19 +107,45 @@ def percentile_against(values: pd.Series, reference: pd.Series) -> pd.Series:
     return pd.Series(np.where(vals.notna(), pos / len(ref), np.nan), index=vals.index)
 
 
-def market_on(market_close: pd.Series | None) -> pd.Series:
-    """The on/off switch: True on days SPY closed above its 200-day average."""
+def _align(s: pd.Series | None, index: pd.Index) -> pd.Series | None:
+    if s is None or len(s) == 0:
+        return None
+    s = s.astype(float).copy()
+    s.index = pd.DatetimeIndex(s.index).normalize()
+    s = s[~s.index.duplicated(keep="last")]
+    return s.reindex(s.index.union(pd.DatetimeIndex(index).normalize())).ffill().reindex(pd.DatetimeIndex(index).normalize()).set_axis(index)
+
+
+def market_on(market_close: pd.Series | None, vix: pd.Series | None = None) -> pd.Series:
+    """The on/off switch: True on days SPY closed above its 200-day average, or (with VIX) during a panic."""
     if market_close is None or len(market_close) == 0:
         return pd.Series(dtype=bool)
     m = market_close.astype(float)
-    return (m > ind.sma(m, TREND_DAYS)).fillna(False)
+    on = (m > ind.sma(m, TREND_DAYS)).fillna(False)
+    v = _align(vix, m.index)
+    if v is not None:
+        on = on | (v > PANIC_VIX).fillna(False)
+    return on
+
+
+def sector_returns(index: pd.Index, columns: pd.Index, sector_etf: dict | pd.Series | None,
+                   etf_close: pd.DataFrame | None, days: int = 3) -> pd.DataFrame | None:
+    """Each stock's sector-ETF return over ``days`` (dates x tickers), from a {ticker: ETF} map."""
+    if sector_etf is None or etf_close is None or etf_close.empty:
+        return None
+    etf = etf_close.astype(float)
+    etf.index = pd.DatetimeIndex(etf.index).normalize()
+    etf = etf[~etf.index.duplicated(keep="last")]
+    r = (etf / etf.shift(days) - 1).reindex(pd.DatetimeIndex(index).normalize()).set_axis(index)
+    m = dict(sector_etf)
+    return pd.DataFrame({c: r[m[c]] if m.get(c) in r else np.nan for c in columns}, index=index)
 
 
 def signal_frames(close: pd.DataFrame) -> dict:
-    """Leader Dip inputs and signals for a panel of closes (dates x tickers).
+    """Classic Leader Dip inputs and signals for a panel of closes (dates x tickers).
 
-    The strength rank is each stock's 6-month gain ranked against the other
-    columns that day, so pass the whole index, not a handful of tickers."""
+    The strength rank is each stock's 6-month gain ranked against the other columns that day, so pass the
+    whole index, not a handful of tickers."""
     close = close.astype(float)
     rsi2 = ind.rsi(close, RSI_DAYS)
     sma200 = ind.sma(close, TREND_DAYS)
@@ -100,13 +156,43 @@ def signal_frames(close: pd.DataFrame) -> dict:
             "sell": (rsi2 > SELL_ABOVE).fillna(False), "limit": close * LIMIT}
 
 
-def latest(close: pd.DataFrame, reference_gains: pd.Series | None = None) -> pd.DataFrame:
+def quality_points(ohlc: dict, vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> dict:
+    """The four Plus quality points (bool frames) and their count, for an OHLC panel."""
+    c = ohlc["Close"].astype(float)
+    atr = swing_engine.panel_atr(ohlc, ATR_DAYS)
+    deep = ((c.rolling(10, min_periods=10).max() - c) / atr >= DEEP_DIP_ATR)
+    off = c < (1 - OFF_HIGH) * c.rolling(252, min_periods=126).max()
+    sec = (sector_ret3.reindex(index=c.index, columns=c.columns) < SECTOR_DROP) if sector_ret3 is not None else \
+        pd.DataFrame(False, index=c.index, columns=c.columns)
+    v = _align(vix, c.index)
+    fear = pd.DataFrame(np.repeat(((v > FEAR_VIX).fillna(False) if v is not None else pd.Series(False, index=c.index))
+                                  .to_numpy()[:, None], c.shape[1], 1), index=c.index, columns=c.columns)
+    parts = {"Deep dip": deep.fillna(False), "Off the high": off.fillna(False), "Sector dip": sec.fillna(False),
+             "Fear (VIX > 20)": fear}
+    return {"parts": parts, "count": sum(p.astype(int) for p in parts.values()), "atr": atr}
+
+
+def plus_frames(ohlc: dict, vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> dict:
+    """Leader Dip Plus signals for an OHLC panel: the classic signal plus a quality point, the profit target
+    and the exit signal."""
+    base = signal_frames(ohlc["Close"])
+    q = quality_points(ohlc, vix, sector_ret3)
+    c = ohlc["Close"].astype(float)
+    below = (c < base["sma200"]).fillna(False)
+    return {**base, "quality": q["count"], "quality_parts": q["parts"], "atr": q["atr"],
+            "buy": base["buy"] & (q["count"] >= 1), "target": c + TARGET_ATR * q["atr"],
+            "exit": base["sell"] | below, "below200": below}
+
+
+def latest(close: pd.DataFrame, reference_gains: pd.Series | None = None, ohlc: dict | None = None,
+           vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> pd.DataFrame:
     """Every stock's Leader Dip reading at the last close.
 
-    ``reference_gains`` (the S&P 500's 6-month gains) sets the strength rank;
-    without it the stocks are ranked against each other."""
+    ``reference_gains`` (the S&P 500's 6-month gains) sets the strength rank; without it the stocks are ranked
+    against each other. With ``ohlc`` (highs and lows) the Plus rules apply: quality points, the profit target
+    and the 200-day exit. Without it the classic signal is returned."""
     close = close.astype(float).dropna(how="all")
-    tail = close.iloc[-(TREND_DAYS + 60):]
+    tail = close.iloc[-(TREND_DAYS + 300):]
     rsi2 = ind.rsi(tail, RSI_DAYS).iloc[-1]
     sma200 = ind.sma(tail, TREND_DAYS).iloc[-1]
     px = tail.ffill().iloc[-1]
@@ -120,33 +206,68 @@ def latest(close: pd.DataFrame, reference_gains: pd.Series | None = None) -> pd.
     out["Signal"] = out["Uptrend"] & out["Leader"] & (out["RSI2"] < BUY_BELOW)
     out["Limit"] = out["Price"] * LIMIT
     out["Sell signal"] = out["RSI2"] > SELL_ABOVE
+    if ohlc is not None:
+        sub = {f: ohlc[f].reindex(index=tail.index, columns=tail.columns) for f in ("Open", "High", "Low", "Close")}
+        sr = sector_ret3.reindex(index=tail.index, columns=tail.columns) if sector_ret3 is not None else None
+        q = quality_points(sub, vix, sr)
+        out["Quality"] = q["count"].iloc[-1]
+        out["Quality points"] = [", ".join(k for k, p in q["parts"].items() if bool(p[s].iloc[-1])) for s in out.index]
+        out["ATR"] = q["atr"].iloc[-1]
+        out["Target"] = out["Price"] + TARGET_ATR * out["ATR"]
+        out["Base signal"] = out["Signal"]
+        out["Signal"] = out["Signal"] & (out["Quality"] >= 1)
+        out["Sell signal"] = out["Sell signal"] | ~out["Uptrend"]
     return out.dropna(subset=["Price"])
 
 
 def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
-                 market_close: pd.Series | None = None) -> dict:
-    """One stock's Leader Dip status at the last close, with a checklist."""
+                 market_close: pd.Series | None = None, vix: pd.Series | None = None,
+                 sector_close: pd.Series | None = None) -> dict:
+    """One stock's Leader Dip Plus status at the last close, with a checklist. ``sector_close`` is the
+    stock's sector ETF (for the sector-dip quality point)."""
     c = ohlcv["Close"].astype(float).dropna()
+    h = ohlcv["High"].astype(float).reindex(c.index)
+    lo = ohlcv["Low"].astype(float).reindex(c.index)
     rsi2 = ind.rsi(c, RSI_DAYS)
     sma200 = ind.sma(c, TREND_DAYS)
     gain_s = six_month_gain(c)
     price, r2, s200, gain = (float(x.iloc[-1]) if len(x) else np.nan for x in (c, rsi2, sma200, gain_s))
     rank = (float(percentile_against(pd.Series([gain]), reference_gains).iloc[0])
             if reference_gains is not None and len(reference_gains.dropna()) >= 10 else np.nan)
-    mkt = market_on(market_close)
+    sr3 = None
+    if sector_close is not None and len(sector_close.dropna()) > 5:
+        s_ = _align(sector_close, c.index)
+        sr3 = pd.DataFrame({"x": s_ / s_.shift(3) - 1})
+    panel = {"Open": c.to_frame("x"), "High": h.to_frame("x"), "Low": lo.to_frame("x"), "Close": c.to_frame("x")}
+    q = quality_points(panel, vix, sr3)
+    atr = float(q["atr"]["x"].iloc[-1]) if len(c) else np.nan
+    parts = {k: bool(p["x"].iloc[-1]) for k, p in q["parts"].items()} if len(c) else {}
+    n_q = sum(parts.values())
+    hi10 = float(c.iloc[-10:].max()) if len(c) >= 10 else np.nan
+    hi252 = float(c.iloc[-252:].max()) if len(c) else np.nan
+    v_al = _align(vix, c.index)
+    v_now = float(v_al.iloc[-1]) if v_al is not None and len(v_al) else np.nan
+    mkt = market_on(market_close, vix)
     m_ok = bool(mkt.iloc[-1]) if len(mkt) else None
     m_gap = (float(market_close.iloc[-1] / ind.sma(market_close.astype(float), TREND_DAYS).iloc[-1] - 1)
              if market_close is not None and len(market_close) > TREND_DAYS else np.nan)
     up = bool(np.isfinite(s200) and price > s200)
     leader = bool(np.isfinite(rank) and rank > STRENGTH_MIN)
     dip = bool(np.isfinite(r2) and r2 < BUY_BELOW)
-    signal = up and leader and dip
+    signal = up and leader and dip and n_q >= 1
     limit = price * LIMIT
+    target = price + TARGET_ATR * atr if np.isfinite(atr) else np.nan
+    sec_txt = (f"sector ETF {float(sr3['x'].iloc[-1]):+.1%} in 3 days" if sr3 is not None and np.isfinite(sr3["x"].iloc[-1])
+               else "sector ETF n/a")
+    q_detail = (f"{n_q} of 4: deep dip {(hi10 - price) / atr:.1f} ATR" if np.isfinite(atr) and atr > 0 else f"{n_q} of 4") + \
+        (f"; {price / hi252 - 1:+.0%} vs 52-week high" if np.isfinite(hi252) else "") + f"; {sec_txt}" + \
+        (f"; VIX {v_now:.0f}" if np.isfinite(v_now) else "; VIX n/a")
     rows = [
-        {"Rule": "Market switch: SPY above its 200-day average", "Pass": m_ok,
-         "Detail": f"SPY {m_gap:+.1%} vs its 200-day" if np.isfinite(m_gap) else "SPY data unavailable",
-         "Why it matters": "New trades are only placed in a market uptrend. In the research this kept the system out "
-                           "of most of 2008 and 2022."},
+        {"Rule": "Market switch: SPY above its 200-day (or VIX above 25)", "Pass": m_ok,
+         "Detail": (f"SPY {m_gap:+.1%} vs its 200-day" if np.isfinite(m_gap) else "SPY data unavailable") +
+                   (f", VIX {v_now:.0f}" if np.isfinite(v_now) else ""),
+         "Why it matters": "New trades only in a market uptrend, or in a panic when even leaders get dumped. In the "
+                           "research this kept the system out of most of 2008 and 2022."},
         {"Rule": "Stock above its 200-day average", "Pass": up if np.isfinite(s200) else None,
          "Detail": f"{price / s200 - 1:+.1%}" if np.isfinite(s200) else "needs 200 days of history",
          "Why it matters": "Dips in long-term uptrends tend to bounce; dips in downtrends tend to keep going."},
@@ -157,13 +278,20 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
         {"Rule": f"2-day RSI below {BUY_BELOW:.0f}", "Pass": dip if np.isfinite(r2) else None,
          "Detail": f"{r2:.0f}" if np.isfinite(r2) else "n/a",
          "Why it matters": "A sharp two-day drop: the kind of overreaction that has tended to reverse within days."},
+        {"Rule": "At least one quality point", "Pass": n_q >= 1 if len(c) else None, "Detail": q_detail,
+         "Why it matters": "A deep flush, a stock well off its high, a sector-wide selloff or a fearful market made "
+                           "for better bounces in 2000-12, and the rule held up after 2013."},
     ]
     if signal and m_ok is not False:
         label, tone = "Buy signal", "pos"
-        note = f"Place a limit buy at ${limit:,.2f} for the next session only. {EXIT_RULE}"
+        note = (f"Place a limit buy at ${limit:,.2f} for the next session only. If it fills, set a sell limit at "
+                f"${target:,.2f} (+{TARGET_ATR:g} ATR). {EXIT_RULE}")
     elif signal:
         label, tone = "Signal, market switch off", "neu"
-        note = "The stock qualifies, but SPY is below its 200-day average, so the system takes no new trades."
+        note = "The stock qualifies, but SPY is below its 200-day average and VIX is calm, so the system takes no new trades."
+    elif up and leader and dip:
+        label, tone = "Dip without a quality point", "neu"
+        note = "The classic signal fired, but none of the four quality points did, so Plus skips it."
     elif up and leader and np.isfinite(r2) and r2 < 30:
         label, tone = "Dip forming", "neu"
         note = f"A leader in an uptrend with its 2-day RSI at {r2:.0f}; the signal needs it below {BUY_BELOW:.0f}."
@@ -176,7 +304,9 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
         note = "Not a candidate: " + ("; ".join(m[0].lower() + m[1:] for m in missing) if missing else "not enough data") + "."
     return {"label": label, "tone": tone, "note": note, "signal": signal, "market_on": m_ok, "market_gap": m_gap,
             "price": price, "rsi2": r2, "sma200": s200, "vs200": price / s200 - 1 if np.isfinite(s200) else np.nan,
-            "gain": gain, "rank": rank, "limit": limit, "sell_now": bool(np.isfinite(r2) and r2 > SELL_ABOVE),
+            "gain": gain, "rank": rank, "limit": limit, "target": target, "atr": atr, "quality": n_q,
+            "quality_parts": parts, "vix": v_now,
+            "sell_now": bool((np.isfinite(r2) and r2 > SELL_ABOVE) or (np.isfinite(s200) and price < s200)),
             "checklist": rows, "rsi2_series": rsi2, "sma200_series": sma200}
 
 
@@ -200,10 +330,10 @@ def _band(close: pd.Series, sma: pd.Series, band: float) -> pd.Series:
     return pd.Series(out, index=close.index, dtype=object)
 
 
-def regime(market_close: pd.Series) -> dict:
+def regime(market_close: pd.Series, vix: pd.Series | None = None) -> dict:
     """SPY's trend read three ways, for the dashboard's regime light.
 
-    * the 200-day line, which is Leader Dip's on/off switch
+    * the 200-day line, Leader Dip's on/off switch (also on during a panic, VIX above 25)
     * the 200-day with a 2% band, which only flips on a clear break and so trades far less
     * the 10-month average, checked once a month (Faber 2007)
     """
@@ -220,13 +350,17 @@ def regime(market_close: pd.Series) -> dict:
     ma10 = monthly.rolling(10).mean()
     ten = bool(monthly.iloc[-1] > ma10.iloc[-1]) if len(monthly) >= 10 and np.isfinite(ma10.iloc[-1]) else None
     flips = int((band.astype(float).diff().abs() > 0).iloc[-252:].sum())
+    v = _align(vix, m.index)
+    v_now = float(v.iloc[-1]) if v is not None and np.isfinite(v.iloc[-1]) else np.nan
+    panic = bool(np.isfinite(v_now) and v_now > PANIC_VIX)
     return {
         "price": float(m.iloc[-1]), "sma200": float(sma.iloc[-1]), "gap200": float(m.iloc[-1] / sma.iloc[-1] - 1),
         "above200": above, "band_on": bool(band.iloc[-1]) if band.iloc[-1] is not None else None,
         "ten_month_on": ten, "ten_month_avg": float(ma10.iloc[-1]) if len(ma10) and np.isfinite(ma10.iloc[-1]) else np.nan,
         "month_close": float(monthly.iloc[-1]) if len(monthly) else np.nan,
         "month_end": monthly.index[-1] if len(monthly) else None, "band_flips_1y": flips,
-        "leader_dip_on": above, "idle_cash": "SPY" if above else "T-bills",
+        "vix": v_now, "panic": panic,
+        "leader_dip_on": above or panic, "idle_cash": "SPY" if above else "T-bills",
     }
 
 
@@ -235,154 +369,56 @@ def regime(market_close: pd.Series) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _daily_cash(dates: pd.DatetimeIndex, tbill_yields: pd.Series | None, fallback: float = 0.04) -> np.ndarray:
-    y = pd.Series(fallback, index=dates)
-    if tbill_yields is not None and len(tbill_yields.dropna()):
-        t = tbill_yields.dropna().astype(float)
-        t.index = pd.DatetimeIndex(t.index)
-        y = t.reindex(dates.union(t.index)).ffill().reindex(dates).bfill().fillna(fallback)
-    return ((1 + y.shift(1).fillna(y.iloc[0])) ** (1 / 252) - 1).to_numpy()
-
-
-def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "tbills", tbill_yields: pd.Series | None = None,
-             slots: int = SLOTS, cost_bps: float = COST_BPS, start=None) -> dict:
+def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbill_yields: pd.Series | None = None,
+             slots: int = SLOTS, cost_bps: float = COST_BPS, start=None, rules: str = "plus",
+             vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> dict:
     """Run Leader Dip on a panel {"Open"|"High"|"Low"|"Close": dates x tickers}.
 
-    Orders are decided at the close of day t and executed on day t+1: exits at
-    the open, then limit entries in strength order while slots are free. Each
-    new trade gets 1/``slots`` of the account; idle cash earns ``cash``:
-    "tbills", "spy_trend" (SPY when it closed above its 200-day the day
-    before) or "spy". ``cost_bps`` is charged on each buy and each sell."""
+    ``rules`` is "plus" (quality points, profit target, 200-day exit, panic-aware switch) or "classic".
+    Orders are decided at the close of day t and executed on day t+1 (see ``swing_engine``). Idle cash earns
+    ``cash``: "spy_trend" (SPY when it closed above its 200-day the day before, T-bills otherwise), "tbills"
+    or "spy". ``cost_bps`` is charged on each buy and each sell."""
     C = ohlcv["Close"].astype(float).sort_index()
     C = C.loc[:, C.notna().sum() > TREND_DAYS]
-    dates, syms = C.index, list(C.columns)
-    O, H, L = (ohlcv[f].reindex(index=dates, columns=syms).astype(float).to_numpy() for f in ("Open", "High", "Low"))
-    sig = signal_frames(C)
-    Cn = C.to_numpy()
-    buy = sig["buy"].to_numpy()
-    sell = sig["sell"].to_numpy()
-    score = sig["gain"].to_numpy()
-    lim = sig["limit"].to_numpy()
+    dates = C.index
+    panel = {f: ohlcv[f].reindex(index=dates, columns=C.columns).astype(float) for f in ("Open", "High", "Low")}
+    panel["Close"] = C
     m = market_close.astype(float).reindex(dates.union(market_close.index)).ffill().reindex(dates)
-    gate = market_on(m).to_numpy()
+    plus = rules == "plus"
+    gate = market_on(m, vix if plus else None).to_numpy()
     spy_r = m.pct_change(fill_method=None).fillna(0.0).to_numpy()
-    rf = _daily_cash(dates, tbill_yields)
-    if cash == "spy":
-        cash_r = spy_r
-    elif cash == "spy_trend":
-        cash_r = np.where(np.r_[False, gate[:-1]], spy_r, rf)
-    else:
-        cash_r = rf
-    cost = cost_bps / 1e4
-    T, N, K = len(dates), len(syms), int(slots)
+    rf = swing_engine.daily_cash(dates, tbill_yields)
+    trend = (m > ind.sma(m, TREND_DAYS)).fillna(False).to_numpy()
+    cash_r = spy_r if cash == "spy" else np.where(np.r_[False, trend[:-1]], spy_r, rf) if cash == "spy_trend" else rf
     t0 = TREND_DAYS
     if start is not None:
         t0 = max(t0, int(dates.searchsorted(pd.Timestamp(start))))
-    if T - t0 < 30:
+    if len(dates) - t0 < 30:
         raise ValueError("Not enough price history for a Leader Dip backtest (needs about a year).")
-
-    slot_j = np.full(K, -1)
-    shares, entry_px, entry_t = np.zeros(K), np.zeros(K), np.zeros(K, int)
-    last_c, exit_next, exit_why = np.zeros(K), np.zeros(K, bool), [""] * K
-    held = np.zeros(N, bool)
-    pend: list[tuple[int, float]] = []
-    cash_bal, last_eq = 1.0, 1.0
-    eq, expo = np.full(T, np.nan), np.zeros(T)
-    trades = []
-
-    for t in range(t0, T):
-        cash_bal *= 1 + cash_r[t]
-        # 1) exits decided yesterday, at today's open
-        for k in range(K):
-            if slot_j[k] >= 0 and exit_next[k]:
-                j = slot_j[k]
-                px = O[t, j] if np.isfinite(O[t, j]) and O[t, j] > 0 else last_c[k]
-                cash_bal += shares[k] * px * (1 - cost)
-                trades.append((syms[j], dates[entry_t[k] - 1], dates[entry_t[k]], entry_px[k], dates[t], px,
-                               px * (1 - cost) / (entry_px[k] * (1 + cost)) - 1, t - entry_t[k], exit_why[k]))
-                held[j], slot_j[k], shares[k], exit_next[k] = False, -1, 0.0, False
-        # 2) limit entries placed yesterday
-        for j, limit in pend:
-            free = np.flatnonzero(slot_j < 0)
-            if not len(free):
-                break
-            o, lo = O[t, j], L[t, j]
-            if not (np.isfinite(o) and o > 0 and np.isfinite(lo)) or lo > limit:
-                continue
-            px = min(o, limit)
-            alloc = min(last_eq / K, cash_bal)
-            if alloc <= 1e-9:
-                break
-            k = free[0]
-            slot_j[k], shares[k], entry_px[k], entry_t[k], last_c[k] = j, alloc / (px * (1 + cost)), px, t, px
-            cash_bal -= alloc
-            held[j] = True
-        pend = []
-        # 3) mark to market
-        inv = 0.0
-        for k in range(K):
-            if slot_j[k] >= 0:
-                c = Cn[t, slot_j[k]]
-                if np.isfinite(c):
-                    last_c[k] = c
-                inv += shares[k] * last_c[k]
-        last_eq = cash_bal + inv
-        eq[t], expo[t] = last_eq, inv / last_eq if last_eq > 0 else 0.0
-        if t == T - 1:
-            break
-        # 4) exits for tomorrow's open
-        n_free = int((slot_j < 0).sum())
-        for k in range(K):
-            j = slot_j[k]
-            if j < 0:
-                continue
-            why = ("RSI(2) above 70" if sell[t, j] else f"{MAX_DAYS} days" if t - entry_t[k] + 1 >= MAX_DAYS
-                   else "No more data" if not np.isfinite(Cn[t + 1, j]) else "")
-            if why:
-                exit_next[k], exit_why[k] = True, why
-                n_free += 1
-        # 5) new limit orders for tomorrow, strongest first
-        if n_free and gate[t]:
-            cand = np.flatnonzero(buy[t] & ~held & np.isfinite(score[t]))
-            if len(cand):
-                order = cand[np.argsort(-score[t, cand], kind="stable")][:n_free]
-                pend = [(int(j), float(lim[t, j])) for j in order]
-
-    for k in range(K):  # still open at the end
-        j = slot_j[k]
-        if j >= 0:
-            trades.append((syms[j], dates[entry_t[k] - 1], dates[entry_t[k]], entry_px[k], pd.NaT, last_c[k],
-                           last_c[k] / (entry_px[k] * (1 + cost)) - 1, T - 1 - entry_t[k], "Open"))
-    cols = ["Symbol", "Signal date", "Bought", "Buy price", "Sold", "Sell price", "Return", "Days held", "Why it sold"]
-    tr = pd.DataFrame(trades, columns=cols).sort_values("Bought", kind="stable").reset_index(drop=True)
-    equity = pd.Series(eq[t0:], index=dates[t0:])
-    rets = equity.pct_change().fillna(0.0)
+    if plus:
+        sig = plus_frames(panel, vix, sector_ret3)
+        labels = pd.DataFrame(np.where(sig["sell"].to_numpy(), "RSI(2) above 70",
+                                       np.where(sig["below200"].to_numpy(), "Closed under 200-day", "")),
+                              index=dates, columns=C.columns)
+        run = swing_engine.run(panel, sig["buy"], sig["gain"], gate, cash_r, exit_signal=sig["exit"], limit=sig["limit"],
+                               target=sig["target"], max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0,
+                               exit_labels=labels)
+    else:
+        sig = signal_frames(C)
+        run = swing_engine.run(panel, sig["buy"], sig["gain"], gate, cash_r, exit_signal=sig["sell"], limit=sig["limit"],
+                               max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="RSI(2) above 70")
+    equity, tr = run["equity"], run["trades"]
     spy_eq = pd.Series(np.cumprod(1 + spy_r[t0:]) / (1 + spy_r[t0]), index=dates[t0:])
     ew_r = C.pct_change(fill_method=None).iloc[t0:].mean(axis=1).fillna(0.0)
     ew_r.iloc[0] = 0.0
     rf_s = pd.Series(rf[t0:], index=dates[t0:])
-    return {"equity": equity, "returns": rets, "exposure": pd.Series(expo[t0:], index=dates[t0:]), "trades": tr,
+    return {"equity": equity, "returns": equity.pct_change().fillna(0.0), "exposure": run["exposure"], "trades": tr,
             "spy_equity": spy_eq, "basket_equity": (1 + ew_r).cumprod(), "stats": stats(equity, rf_s, tr),
             "spy_stats": stats(spy_eq, rf_s), "basket_stats": stats((1 + ew_r).cumprod(), rf_s),
-            "symbols": len(syms)}
+            "symbols": C.shape[1], "rules": rules}
 
 
-def stats(equity: pd.Series, rf_daily: pd.Series | None = None, trades: pd.DataFrame | None = None) -> dict:
-    e = equity.dropna()
-    r = e.pct_change().dropna()
-    years = len(r) / 252
-    out = {"Return per year": float((e.iloc[-1] / e.iloc[0]) ** (1 / years) - 1) if years > 0 else np.nan,
-           "Total return": float(e.iloc[-1] / e.iloc[0] - 1), "Worst drop": float((e / e.cummax() - 1).min()),
-           "Volatility": float(r.std() * np.sqrt(252)), "Years": years}
-    ex = r - (rf_daily.reindex(r.index).fillna(0.0) if rf_daily is not None else 0.0)
-    out["Sharpe"] = float(ex.mean() / r.std() * np.sqrt(252)) if r.std() > 0 else np.nan
-    if trades is not None:
-        done = trades[trades["Why it sold"] != "Open"]
-        out.update({"Trades": int(len(done)), "Trades per year": len(done) / years if years else np.nan,
-                    "Win rate": float((done["Return"] > 0).mean()) if len(done) else np.nan,
-                    "Avg trade": float(done["Return"].mean()) if len(done) else np.nan,
-                    "Avg days held": float(done["Days held"].mean()) if len(done) else np.nan})
-    return out
+stats = swing_engine.stats
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +427,7 @@ def stats(equity: pd.Series, rf_daily: pd.Series | None = None, trades: pd.DataF
 
 
 def follow_up(log: pd.DataFrame, ohlcv: dict) -> pd.DataFrame:
-    """For each logged signal (Date, Symbol, Close, Limit), whether the limit
+    """For each logged signal (Date, Symbol, Close, Limit and, for Plus signals, Target), whether the limit
     filled the next session and how the trade went under the exit rules."""
     if log.empty:
         return log
@@ -407,6 +443,7 @@ def follow_up(log: pd.DataFrame, ohlcv: dict) -> pd.DataFrame:
             continue
         c = C[sym].dropna()
         o, lo = ohlcv["Open"][sym].reindex(c.index), ohlcv["Low"][sym].reindex(c.index)
+        hi = ohlcv["High"][sym].reindex(c.index) if "High" in ohlcv else c
         after = c.index[c.index > d]
         if not len(after):
             rows.append(out)
@@ -419,12 +456,27 @@ def follow_up(log: pd.DataFrame, ohlcv: dict) -> pd.DataFrame:
             continue
         fill = float(min(o.iloc[t_in], limit)) if np.isfinite(o.iloc[t_in]) else limit
         out.update({"Filled": True, "Fill price": fill})
+        tgt = float(s["Target"]) if "Target" in s and pd.notna(s.get("Target")) else np.nan
         r2 = ind.rsi(c, RSI_DAYS)
-        exit_t = None
+        s200 = ind.sma(c, TREND_DAYS) if np.isfinite(tgt) else pd.Series(np.nan, index=c.index)
+        exit_t, done = None, False
         for t in range(t_in, len(c)):
-            if r2.iloc[t] > SELL_ABOVE or t - t_in + 1 >= MAX_DAYS:
+            if np.isfinite(tgt):
+                if t > t_in and np.isfinite(o.iloc[t]) and o.iloc[t] >= tgt:
+                    out.update({"Exit date": c.index[t], "Exit price": float(o.iloc[t]), "Return": float(o.iloc[t]) / fill - 1,
+                                "Status": "Closed"})
+                    done = True
+                    break
+                if np.isfinite(hi.iloc[t]) and hi.iloc[t] >= tgt:
+                    out.update({"Exit date": c.index[t], "Exit price": tgt, "Return": tgt / fill - 1, "Status": "Closed"})
+                    done = True
+                    break
+            if r2.iloc[t] > SELL_ABOVE or t - t_in + 1 >= MAX_DAYS or (np.isfinite(s200.iloc[t]) and c.iloc[t] < s200.iloc[t]):
                 exit_t = t + 1
                 break
+        if done:
+            rows.append(out)
+            continue
         if exit_t is not None and exit_t < len(c):
             px = float(o.iloc[exit_t]) if np.isfinite(o.iloc[exit_t]) else float(c.iloc[exit_t])
             out.update({"Exit date": c.index[exit_t], "Exit price": px, "Return": px / fill - 1, "Status": "Closed"})

@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from sharkfin import builder, data, leader_dip, swing, ui
+from sharkfin import builder, data, leader_dip, live, swing, ui
 from sharkfin.explain import tip
 
 ui.header("Strategy Lab",
@@ -101,7 +101,7 @@ def condition_rows(kind: str):
 
 
 # ---------------------------------------------------------------------------
-tabs = st.tabs(["Build and test", "Compare strategies", "Leader Dip (S&P 500)"])
+tabs = st.tabs(["Build and test", "Compare strategies", "Leader Dip Plus 7 (S&P 500)"])
 
 def build_tab():
     names = list(builder.TEMPLATES)
@@ -347,7 +347,7 @@ with tabs[1]:
 
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
-def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: float) -> dict:
+def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: float, rules: str = "plus") -> dict:
     syms_ = tuple(data.universe(universe))
     ohlcv = data.download_ohlcv(syms_, period=years)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
@@ -355,24 +355,31 @@ def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: f
     mkt = data.market_history(years)
     if mkt.empty:
         raise ValueError("Couldn't download SPY, which the market switch needs.")
+    m = live.market_inputs(years)
+    sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
     return leader_dip.backtest(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
-                               cost_bps=cost_bps)
+                               cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None, sector_ret3=sr)
 
 
 def leader_dip_tab():
     st.markdown(
-        "<div class='sf-note'><b>Leader Dip</b>, SharkFin's swing system, the one behind Top Performers and Trade setup. "
-        "It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and among the "
-        "30% strongest in the S&amp;P 500 over 6 months, with a limit order 3% under the signal close. It sells at the "
-        "next open once the 2-day RSI closes above 70, or after 10 days, with no stop loss, and only opens trades while "
-        "SPY is above its 200-day. Because it picks from the whole index and fires only a few times a year on any one "
-        "stock, it is tested as a portfolio of the index, not on the ticker above.</div>", unsafe_allow_html=True)
-    q = st.columns(4)
+        "<div class='sf-note'><b>Leader Dip Plus 7</b>, SharkFin's swing system, the one behind Top Performers and Trade "
+        "setup. It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and among "
+        "the 30% strongest in the S&amp;P 500 over 6 months, if it has at least one quality point (a deep dip, a stock "
+        "well off its high, a sector selloff or VIX above 20), with a limit order 3% under the signal close. It sells at "
+        "a profit target of the signal close + 1.5 ATR, or at the next open once the 2-day RSI closes above 70, the "
+        "stock closes under its 200-day, or 10 days pass. It opens trades while SPY is above its 200-day or VIX is above "
+        "25, holds 7 at a time, and parks idle cash in SPY. <b>Classic</b> is the original rules (10 slots, RSI exit "
+        "only). Strategy Playbook explains why it works.</div>", unsafe_allow_html=True)
+    q = st.columns(5)
     universe = q[0].selectbox("Stocks", ["S&P 500", "Nasdaq-100"], key="ld_uni")
-    years = q[1].segmented_control("History", ["5y", "10y"], default="10y", key="ld_years") or "10y"
-    cash_label = q[2].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=1, key="ld_cash",
+    rules_label = q[1].selectbox("Rules", list(leader_dip.RULESETS), key="ld_rules")
+    years = q[2].segmented_control("History", ["5y", "10y"], default="10y", key="ld_years") or "10y"
+    cash_label = q[3].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=0, key="ld_cash",
                                 help=leader_dip.CASH_HELP)
-    slots = q[3].slider("Slots", 5, 20, leader_dip.SLOTS, key="ld_slots", help=tip("ld_slots"))
+    rules_key = leader_dip.RULESETS[rules_label]
+    slots = q[4].slider("Slots", 3, 20, leader_dip.SLOTS if rules_key == "plus" else leader_dip.CLASSIC_SLOTS,
+                        key=f"ld_slots_{rules_key}", help=tip("ld_slots"))
     st.caption(f"Costs: {cost:g} bps on each buy and each sell (set at the top of the page; the research used 10).")
     if not (st.button(f"Backtest Leader Dip on the {universe}", type="primary", key="ld_run")
             or st.session_state.get("ld_ran")):
@@ -381,7 +388,7 @@ def leader_dip_tab():
     st.session_state.ld_ran = True
     try:
         with st.spinner(f"Downloading the {universe} and replaying every day…"):
-            res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost))
+            res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost), rules_key)
     except ValueError as e:
         st.warning(str(e))
         return
@@ -456,8 +463,9 @@ def leader_dip_tab():
             "Leader Dip": st.column_config.NumberColumn(format="percent"), "SPY": st.column_config.NumberColumn(format="percent")})
     st.caption("This uses today's index members, so stocks that were dropped (often the big losers) are missing, which "
                "flatters a strength-based system like this one. SharkFin's research ran it on the members of each date: "
-               "12.7% a year in 2013-26 with a 1.02 Sharpe, and the median of 576 nearby variants was 9.9% a year. "
-               "Expect results closer to that than to a perfect-hindsight run.")
+               "Plus 7 made 33.1% a year over the last 5 years (Sharpe 1.40, worst drop 18%) and 16.5% a year in "
+               "2000-12; the classic rules with cash in T-bills made about 12-13% a year. Expect results closer to the "
+               "research than to a perfect-hindsight run.")
 
 
 with tabs[2]:

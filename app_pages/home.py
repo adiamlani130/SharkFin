@@ -10,7 +10,7 @@ import streamlit as st
 from pandas.tseries.holiday import (AbstractHolidayCalendar, GoodFriday, Holiday, USLaborDay, USMartinLutherKingJr,
                                     USMemorialDay, USPresidentsDay, USThanksgivingDay, nearest_workday)
 
-from sharkfin import data, leader_dip, sentiment, ui
+from sharkfin import data, leader_dip, live, playbook, sentiment, ui
 from sharkfin import indicators as ind
 
 
@@ -104,7 +104,8 @@ if len(spx) > 200:
 @st.cache_data(ttl=600, show_spinner=False)
 def spy_regime() -> dict:
     m = data.market_history("2y")
-    return leader_dip.regime(m["Close"]) if not m.empty else {}
+    vix = data.history("^VIX", "2y")
+    return leader_dip.regime(m["Close"], vix["Close"] if not vix.empty else None) if not m.empty else {}
 
 
 reg = spy_regime()
@@ -115,8 +116,10 @@ if reg:
     st.subheader("Market regime", help="Slow trend switches on SPY. In SharkFin's research these halved drawdowns, "
                                        "while faster timing signals whipsawed and lagged plain holding.")
     lines = [
-        f"<div class='row'><b>200-day line</b> · SPY is <b>{abs(reg['gap200']):.1%} {'above' if on else 'below'}</b> its "
-        f"200-day average, so Leader Dip's switch is <b>{'on: new trades allowed' if on else 'off: no new trades'}</b>.</div>",
+        f"<div class='row'><b>200-day line</b> · SPY is <b>{abs(reg['gap200']):.1%} "
+        f"{'above' if reg['above200'] else 'below'}</b> its 200-day average"
+        f"{', but VIX is above 25 (a panic)' if reg.get('panic') and not reg['above200'] else ''}, so Leader Dip's switch is "
+        f"<b>{'on: new trades allowed' if on else 'off: no new trades'}</b>.</div>",
         f"<div class='row'><b>200-day with a 2% band</b> · "
         f"{'Uptrend' if band else 'Downtrend' if band is False else 'Not set yet'}. It only flips on a close more than 2% "
         f"through the average, so it changed {reg['band_flips_1y']} time{'s' if reg['band_flips_1y'] != 1 else ''} in the "
@@ -129,12 +132,36 @@ if reg:
             f"{ui.fmt_money(reg['ten_month_avg']).replace('$', '&#36;')}). Checked once a month: "
             f"{'stay invested' if ten else 'long-term trend money waits in cash'} until the next month end.</div>")
     lines.append(
-        f"<div class='row'><b>Idle cash</b> · {'SPY' if on else 'T-bills'}. Leader Dip's best mix kept money it "
+        f"<div class='row'><b>Idle cash</b> · {reg['idle_cash']}. Leader Dip Plus 7 keeps money it "
         "wasn't using in SPY while SPY was above its 200-day, and in T-bills otherwise.</div>")
     pill_txt = "Leader Dip on" if on else "Leader Dip off"
     st.markdown(f"<div class='sf-card'>{ui.pill(pill_txt, 'pos' if on else 'neg')}"
                 f"{ui.pill('10-month: ' + ('up' if ten else 'down'), 'pos' if ten else 'neg') if ten is not None else ''}"
                 f"{''.join(lines)}</div>", unsafe_allow_html=True)
+
+# ---- Strategy playbook strip ---------------------------------------------------
+@st.cache_data(ttl=120, show_spinner=False)
+def playbook_rows() -> list[dict]:
+    return live.summary_rows(None, None, live.day_night_today())
+
+
+st.subheader("Strategy playbook today", help="Where SharkFin's three researched strategies stand. Strategy Playbook has "
+                                              "the signals, how each works, and the combined plan.")
+cards = []
+for r_ in playbook_rows():
+    f_ = playbook.FACTS.get(r_["Strategy"], {})
+    on_ = r_["Switch"]
+    pill_ = ui.pill("on" if on_ else "off" if on_ is False else "n/a", "pos" if on_ else "neg" if on_ is False else "neu")
+    cards.append(f"<div class='sf-strat' style='--c:{playbook.COLORS.get(r_['Strategy'], ui.MUTED)}'>"
+                 f"<div class='nm'>{ui.h(r_['Strategy'])} {pill_}</div>"
+                 f"<div class='tg'>{f_.get('return', 0):.0%} a year in research · Sharpe {f_.get('sharpe', 0):.2f}</div>"
+                 f"<div class='bl'>{ui.h(r_['Today'])}{'. ' + ui.h(r_['Note']) if r_['Note'] else ''}.</div></div>")
+plan_ = playbook.FACTS["The plan"]
+cards.append(f"<div class='sf-strat' style='--c:{playbook.COLORS['The plan']}'><div class='nm'>The combined plan</div>"
+             f"<div class='tg'>{plan_['return']:.0%} a year · Sharpe {plan_['sharpe']:.2f}</div>"
+             "<div class='bl'>50% Leader Dip Plus 7, 20% Tech Breakout Rider, 30% TQQQ Day + Night, rebalanced monthly. "
+             "Until the TQQQ paper run passes (Dec 11), the 30% stays in Plus 7.</div></div>")
+st.markdown(f"<div class='sf-strats'>{''.join(cards)}</div>", unsafe_allow_html=True)
 
 # ---- Sector rotation ---------------------------------------------------------
 st.subheader("Sectors", help="SPDR sector ETFs. The heatmap shows returns; the map shows which sectors are leading and "

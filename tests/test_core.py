@@ -274,7 +274,8 @@ def test_leader_dip_signals_have_no_lookahead():
 def test_leader_dip_backtest_fills_limits_and_exits():
     from sharkfin import leader_dip
     px, spy = _panel()
-    res = leader_dip.backtest(px, spy, cash="tbills", tbill_yields=pd.Series(0.0, index=spy.index), slots=1, cost_bps=0)
+    res = leader_dip.backtest(px, spy, cash="tbills", tbill_yields=pd.Series(0.0, index=spy.index), slots=1, cost_bps=0,
+                              rules="classic")
     tr = res["trades"]
     done = tr[tr["Why it sold"] != "Open"]
     assert len(done) > 10
@@ -602,3 +603,38 @@ def test_saved_earnings_are_reused_until_the_next_report(monkeypatch, tmp_path):
     data._earnings_to_disk("AAPL", 28, ed)
     back = data._earnings_from_disk("AAPL", 28)
     assert back is not None and back.equals(ed)
+
+
+def test_playbook_plan_matches_the_research():
+    from sharkfin import playbook as pb
+    d = pb.load()
+    st_ = pb.stats(pb.mix(d, pb.WEIGHTS).loc[pb.GRADE[0]:pb.GRADE[1]], d["tbill"])
+    assert abs(st_["Return per year"] - 0.354) < 0.005 and abs(st_["Sharpe"] - 1.60) < 0.03
+    assert abs(st_["Worst drop"] + 0.18) < 0.01
+    w = pb.best_weights(d)
+    assert [round(w[k], 1) for k in (pb.LD, pb.BR, pb.DN)] == [0.5, 0.2, 0.3]
+    sp = pb.split(100_000)
+    assert abs(sum(v["sleeve"] for v in sp.values()) - 100_000) < 1e-6
+
+
+def test_day_night_legs_never_overlap_and_are_buy_only():
+    from sharkfin import day_night
+    from tests import fakes
+    bars = fakes.intraday_bars("TQQQ", 60)
+    res = day_night.backtest(bars)
+    assert len(res["both"]) and res["both"].notna().all()
+    tr = res["day_trades"]
+    assert (tr["Sell price"] > 0).all() and (tr["Buy price"] > 0).all()
+    t = day_night.today(bars, None, pd.Timestamp("2026-09-28 12:10", tz="America/New_York"))
+    assert t and 0 <= t["close_location"] <= 1 and len(t["band"]) == len(day_night.CHECKS)
+
+
+def test_breakout_rider_signals_need_a_new_high():
+    from sharkfin import breakout_rider
+    from tests import fakes
+    ohlc = fakes.download_ohlcv(fakes.SYMS)
+    now = breakout_rider.latest(ohlc, fakes.history("QQQ")["Close"])
+    sig = now[now["Signal"]]
+    assert (sig["Price"] > sig["20-day high"]).all() and (sig["ADX"] > breakout_rider.ADX_MIN).all()
+    res = breakout_rider.backtest(ohlc, fakes.history("QQQ")["Close"])
+    assert {"equity", "trades", "stats"}.issubset(res) and res["equity"].iloc[0] > 0

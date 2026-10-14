@@ -100,6 +100,24 @@ def install(monkeypatch):
     monkeypatch.setattr(data, "sp500_table", lambda: pd.DataFrame({"Symbol": SYMS, "Name": SYMS, "Sector": ["Tech"] * len(SYMS),
                                                                     "SubIndustry": ["Software"] * len(SYMS)}))
     monkeypatch.setattr(data, "universe", lambda name: SYMS)
+    monkeypatch.setattr(data, "intraday_bars", intraday_bars)
+    monkeypatch.setattr(data, "latest_trade", lambda symbol: {})
+    monkeypatch.setattr(data, "alpaca_keys", lambda: None)
+
+
+def intraday_bars(symbol, days=60):
+    """30-minute regular-session bars for the last ``days`` business days (the last day is still in progress)."""
+    rng = np.random.default_rng(sum(map(ord, symbol)))
+    days_idx = pd.bdate_range(end=pd.Timestamp("2026-09-28"), periods=min(days, 60))
+    stamps = [d + pd.Timedelta(minutes=570 + 30 * j) for d in days_idx for j in range(13)][:-5]
+    c = 50 * np.exp(np.cumsum(rng.normal(0, 0.006, len(stamps))))
+    o = np.r_[c[0], c[:-1]]
+    df = pd.DataFrame({"o": o, "h": np.maximum(o, c) * 1.002, "l": np.minimum(o, c) * 0.998, "c": c,
+                       "v": rng.integers(1e5, 1e6, len(stamps)).astype(float)},
+                      index=pd.DatetimeIndex(stamps).tz_localize("America/New_York"))
+    df["vw"] = (df["h"] + df["l"] + df["c"]) / 3
+    df.attrs["source"] = "Test bars"
+    return df
 
 
 def download_ohlcv(symbols, period="2y", chunk=150):

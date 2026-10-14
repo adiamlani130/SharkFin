@@ -50,6 +50,9 @@ pages = {
     "Stock Analysis": [
         st.Page("app_pages/research.py", title="Research & Valuation"),
         st.Page("app_pages/predictions.py", title="Forecasts"),
+    ],
+    "Strategies": [
+        st.Page("app_pages/playbook.py", title="Strategy Playbook"),
         st.Page("app_pages/strategy_lab.py", title="Strategy Lab"),
     ],
     "You": [
