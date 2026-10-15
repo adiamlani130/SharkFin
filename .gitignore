@@ -228,3 +228,5 @@ env/
 .sharkfin/
 portfolio.json
 watchlist.json
+.env
+.claude/settings.local.json
