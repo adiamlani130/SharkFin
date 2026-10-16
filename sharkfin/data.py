@@ -386,6 +386,45 @@ def tbill_yields(period: str = "10y") -> pd.Series:
     return y[(y >= 0) & (y < 0.2)]
 
 
+class _NYSECalendar:
+    """NYSE full-day holidays (built lazily so importing the data layer stays cheap)."""
+
+    _cal = None
+
+    @classmethod
+    def holidays(cls, year: int) -> set:
+        if cls._cal is None:
+            from pandas.tseries.holiday import (AbstractHolidayCalendar, GoodFriday, Holiday, USLaborDay,
+                                                USMartinLutherKingJr, USMemorialDay, USPresidentsDay,
+                                                USThanksgivingDay, nearest_workday)
+
+            class NYSE(AbstractHolidayCalendar):
+                rules = [
+                    Holiday("New Year", month=1, day=1, observance=nearest_workday), USMartinLutherKingJr,
+                    USPresidentsDay, GoodFriday, USMemorialDay,
+                    Holiday("Juneteenth", month=6, day=19, start_date="2022-01-01", observance=nearest_workday),
+                    Holiday("Independence Day", month=7, day=4, observance=nearest_workday), USLaborDay,
+                    USThanksgivingDay, Holiday("Christmas", month=12, day=25, observance=nearest_workday),
+                ]
+
+            cls._cal = NYSE()
+        return set(cls._cal.holidays(f"{year}-01-01", f"{year}-12-31").date)
+
+
+def market_status() -> tuple[str, datetime]:
+    """NYSE session right now ("Open", "Pre-market", "After-hours" or "Closed") and the New York time."""
+    from datetime import time as _t
+
+    import pytz
+
+    ny = datetime.now(pytz.timezone("America/New_York"))
+    trading_day = ny.weekday() < 5 and ny.date() not in _NYSECalendar.holidays(ny.year)
+    is_open = trading_day and _t(9, 30) <= ny.time() < _t(16, 0)
+    pre = trading_day and _t(4, 0) <= ny.time() < _t(9, 30)
+    post = trading_day and _t(16, 0) <= ny.time() < _t(20, 0)
+    return ("Open" if is_open else "Pre-market" if pre else "After-hours" if post else "Closed"), ny
+
+
 MARKET_TICKERS = {
     "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Dow": "^DJI", "Russell 2000": "^RUT", "VIX": "^VIX",
     "10Y Yield": "^TNX", "Dollar": "DX-Y.NYB", "Gold": "GC=F", "Oil (WTI)": "CL=F", "Bitcoin": "BTC-USD",
@@ -459,6 +498,62 @@ def nasdaq100() -> list:
     except Exception:
         pass
     return FALLBACK_NDX
+
+
+SP500_SPELLS_URL = "https://raw.githubusercontent.com/fja05680/sp500/master/sp500_ticker_start_end.csv"
+SP500_SPELLS_FILE = Path(__file__).with_name("research_data") / "sp500_ticker_start_end.csv"
+
+
+def _parse_spells(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.rename(columns=str.lower)
+    if not {"ticker", "start_date", "end_date"} <= set(df.columns) or len(df) < 500:
+        raise ValueError("unexpected S&P 500 membership file")
+    return pd.DataFrame({"ticker": df["ticker"].astype(str).str.strip().str.replace(".", "-", regex=False),
+                         "start": pd.to_datetime(df["start_date"]), "end": pd.to_datetime(df["end_date"])})
+
+
+@ttl_cache(24 * 3600)
+def sp500_spells() -> pd.DataFrame:
+    """Every spell a ticker spent in the S&P 500 since 1996 (ticker, start, end; end is NaT while still a member).
+
+    From the fja05680/sp500 dataset (Andreas Clenow's history plus index changes since 2019), refreshed daily from
+    GitHub; the copy bundled in ``research_data`` is used when the download fails. A ticker is a member from its
+    start date up to the day before its end date (changes take effect before the open)."""
+    try:
+        import io
+
+        import requests
+
+        r = requests.get(SP500_SPELLS_URL, timeout=10)
+        r.raise_for_status()
+        return _parse_spells(pd.read_csv(io.StringIO(r.text)))
+    except Exception as e:  # pragma: no cover - network
+        log.info("S&P 500 membership download failed (%s); using the bundled copy", e)
+    return _parse_spells(pd.read_csv(SP500_SPELLS_FILE))
+
+
+def sp500_members(dates: pd.DatetimeIndex, tickers=None) -> pd.DataFrame:
+    """Point-in-time S&P 500 membership: a dates x tickers frame, True on days the ticker was in the index.
+    ``tickers`` defaults to everyone who was a member at some point in ``dates``."""
+    sp = sp500_spells()
+    dates = pd.DatetimeIndex(dates).normalize()
+    if tickers is None:
+        live = sp[(sp["start"] <= dates.max()) & (sp["end"].isna() | (sp["end"] > dates.min()))]
+        tickers = list(dict.fromkeys(live["ticker"]))
+    out = pd.DataFrame(False, index=dates, columns=list(tickers))
+    for row in sp[sp["ticker"].isin(out.columns)].itertuples(index=False):
+        inside = (dates >= row.start) & ((dates < row.end) if pd.notna(row.end) else True)
+        out[row.ticker] = out[row.ticker].to_numpy() | np.asarray(inside)
+    return out
+
+
+def sp500_ever(start, end=None) -> list:
+    """Every ticker that was in the S&P 500 at some point between ``start`` and ``end`` (for point-in-time
+    backtests: today's members plus the ones that left). Yahoo only has prices for some of the ones that left."""
+    sp = sp500_spells()
+    end = pd.Timestamp(end) if end is not None else pd.Timestamp.now().normalize()
+    live = sp[(sp["start"] <= end) & (sp["end"].isna() | (sp["end"] > pd.Timestamp(start)))]
+    return list(dict.fromkeys(live["ticker"]))
 
 
 def universe(name: str) -> list:

@@ -2,17 +2,21 @@
 
 A fixed number of equal slots. Signals are read at the close of day t and act on day t+1:
 
-  1. exits decided yesterday sell at today's open
+  1. exits decided yesterday sell at today's open; a stock with no bar today (halted, delisted) sells at its
+     last close, found out today rather than foreseen yesterday
   2. limit entries placed yesterday fill if today's low reaches the limit (at the open when it opens below),
      strongest signal first while slots are free; with no limit the order fills at the open
   3. profit targets: a position sells at its target the first day the high reaches it (at the open when it
-     opens above it on a later day)
+     opens above it on a later day). On a day a limit buy filled intraday the target can't also fill: a daily
+     bar doesn't say whether the low or the high came first, so the backtest doesn't assume the lucky order
   4. mark to market at the close
   5. exit signals at today's close (or the holding limit) sell at tomorrow's open
   6. new orders for tomorrow, only while the market gate is on
 
 Each new trade gets 1/slots of the account (capped by the cash on hand), idle cash earns ``cash_returns``,
-and ``cost_bps`` is charged on every buy and every sell. Nothing uses data after the bar it acts on.
+and ``cost_bps`` is charged on every buy and every sell. Every decision uses bars up to the one it acts on,
+never a later one. ``liquidate`` sells whatever is still held at the last close (with costs), so a
+walk-forward test window ends in cash and the next window starts clean.
 This mirrors the simulator used in SharkFin's Oct 2026 research, so the app replays the same rules.
 """
 
@@ -21,11 +25,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .walkforward import STALE_DAYS
+
 
 def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, cash_returns: np.ndarray, *,
         exit_signal: pd.DataFrame | None = None, limit: pd.DataFrame | None = None, target: pd.DataFrame | None = None,
         max_days: int = 10, slots: int = 10, cost_bps: float = 10.0, t0: int = 0, exit_label: str = "Exit signal",
-        exit_labels: pd.DataFrame | None = None) -> dict:
+        exit_labels: pd.DataFrame | None = None, liquidate: bool = False) -> dict:
     """Replay the rules. ``ohlc`` holds "Open", "High", "Low", "Close" frames (dates x tickers) on the same grid
     as ``buy``. ``exit_labels`` (optional, strings) names the exit signal per cell for the trade list."""
     C = ohlc["Close"]
@@ -45,7 +51,7 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
     T, N, K = len(dates), len(syms), int(slots)
 
     slot_j = np.full(K, -1)
-    shares, entry_px, entry_t = np.zeros(K), np.zeros(K), np.zeros(K, int)
+    shares, entry_px, entry_t, at_open = np.zeros(K), np.zeros(K), np.zeros(K, int), np.zeros(K, bool)
     last_c, tgt_px = np.zeros(K), np.full(K, np.nan)
     exit_next, exit_why = np.zeros(K, bool), [""] * K
     held = np.zeros(N, bool)
@@ -64,11 +70,15 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
 
     for t in range(t0, T):
         cash_bal *= 1 + cash_r[t]
-        # 1) exits decided yesterday, at today's open
+        # 1) exits decided yesterday, at today's open; stocks with no bar today sell at their last close
         for k in range(K):
-            if slot_j[k] >= 0 and exit_next[k]:
-                j = slot_j[k]
+            j = slot_j[k]
+            if j < 0:
+                continue
+            if exit_next[k]:
                 close_slot(k, t, O[t, j] if np.isfinite(O[t, j]) and O[t, j] > 0 else last_c[k], exit_why[k])
+            elif not np.isfinite(O[t, j]) and not np.isfinite(Cn[t, j]):
+                close_slot(k, t, last_c[k], "No more data")
         # 2) entries placed yesterday
         for j, lv, tv in pend:
             free = np.flatnonzero(slot_j < 0)
@@ -88,6 +98,7 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
                 break
             k = free[0]
             slot_j[k], shares[k], entry_px[k], entry_t[k], last_c[k], tgt_px[k] = j, alloc / (px * (1 + cost)), px, t, px, tv
+            at_open[k] = px == o
             cash_bal -= alloc
             held[j] = True
         pend = []
@@ -99,7 +110,7 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
             o, hi = O[t, j], H[t, j]
             if t > entry_t[k] and np.isfinite(o) and o >= tgt_px[k]:
                 close_slot(k, t, o, "Profit target")
-            elif np.isfinite(hi) and hi >= tgt_px[k]:
+            elif np.isfinite(hi) and hi >= tgt_px[k] and (t > entry_t[k] or at_open[k]):
                 close_slot(k, t, tgt_px[k], "Profit target")
         # 4) mark to market
         inv = 0.0
@@ -112,6 +123,11 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
         last_eq = cash_bal + inv
         eq[t], expo[t] = last_eq, inv / last_eq if last_eq > 0 else 0.0
         if t == T - 1:
+            if liquidate:
+                for k in range(K):
+                    if slot_j[k] >= 0:
+                        close_slot(k, t, last_c[k], "End of test window")
+                eq[t], expo[t] = cash_bal, 0.0
             break
         # 5) exits for tomorrow's open
         n_free = int((slot_j < 0).sum())
@@ -120,8 +136,7 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
             if j < 0:
                 continue
             why = ((lab[t, j] if lab is not None and isinstance(lab[t, j], str) else exit_label) if ex[t, j]
-                   else f"{max_days} days" if t - entry_t[k] + 1 >= max_days
-                   else "No more data" if not np.isfinite(Cn[t + 1, j]) else "")
+                   else f"{max_days} days" if t - entry_t[k] + 1 >= max_days else "")
             if why:
                 exit_next[k], exit_why[k] = True, why
                 n_free += 1
@@ -145,13 +160,17 @@ def run(ohlc: dict, buy: pd.DataFrame, score: pd.DataFrame, gate: np.ndarray, ca
 
 
 def daily_cash(dates: pd.DatetimeIndex, tbill_yields: pd.Series | None, fallback: float = 0.04) -> np.ndarray:
-    """Daily T-bill return for each date (yesterday's 3-month yield, compounded daily)."""
-    y = pd.Series(fallback, index=dates)
+    """Daily T-bill return for each date: the previous day's 3-month yield, compounded daily.
+
+    Only yields published earlier are used. A missing day keeps the last published yield (for up to
+    ``STALE_DAYS`` days); before the first published yield, or after a longer gap, cash earns ``fallback``."""
+    y = pd.Series(np.nan, index=dates, dtype=float)
     if tbill_yields is not None and len(tbill_yields.dropna()):
         t = tbill_yields.dropna().astype(float)
         t.index = pd.DatetimeIndex(t.index)
-        y = t.reindex(dates.union(t.index)).ffill().reindex(dates).bfill().fillna(fallback)
-    return ((1 + y.shift(1).fillna(y.iloc[0])) ** (1 / 252) - 1).to_numpy()
+        t = t[~t.index.duplicated(keep="last")]
+        y = t.reindex(dates.union(t.index)).ffill(limit=STALE_DAYS).reindex(dates)
+    return ((1 + y.shift(1).fillna(fallback)) ** (1 / 252) - 1).to_numpy()
 
 
 def stats(equity: pd.Series, rf_daily: pd.Series | None = None, trades: pd.DataFrame | None = None) -> dict:

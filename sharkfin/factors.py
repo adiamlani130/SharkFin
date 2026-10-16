@@ -28,6 +28,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from . import walkforward
+
 PRICE_FACTORS = {
     "Momentum": {"mom_12_1": 1.0, "fip": 1.0},
     "Trend": {"trend_200": 1.0, "ma_align": 0.5},
@@ -288,29 +290,37 @@ def explain(row: pd.Series, top: int = 3, weights: dict | None = None) -> tuple[
 
 def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile: float = 0.2,
                              cost_bps: float = 10.0, theme_weights: dict | None = None,
-                             earnings: dict | None = None) -> dict:
+                             earnings: dict | None = None, start=None, members: pd.DataFrame | None = None) -> dict:
     """Monthly-rebalanced long top-quantile portfolio of the price (and, given ``earnings``, earnings) composite.
 
     Uses only information available at each rebalance date: ``earnings`` maps symbols to Yahoo earnings-date
     tables, and only reports dated before each rebalance count. Reports the
     strategy vs an equal-weight universe benchmark, the rank information
-    coefficient (Spearman IC) per period, and turnover-based trading costs.
-    Caveat: uses today's index constituents (survivorship bias).
+    coefficient (Spearman IC) per period, and turnover-based trading costs. With ``members`` (point-in-time
+    index membership) only that month's members are ranked, bought and averaged for the benchmark; without
+    it the replay uses whatever stocks it is given (today's list: survivorship bias). ``start`` delays the
+    first rebalance. One fixed set of weights over the whole span is in-sample: ``walk_forward`` re-picks them.
     """
     keep = REPLAYABLE if earnings else tuple(PRICE_FACTORS)
     tw = {k: v for k, v in (DEFAULT_THEME_WEIGHTS if theme_weights is None else theme_weights).items() if k in keep}
     if not any(v > 0 for v in tw.values()):
         raise ValueError("Give at least one of the price or earnings themes some weight to replay the ranking.")
-    prices = prices.dropna(axis=1, thresh=int(len(prices) * 0.9)).ffill()
+    prices = walkforward.carry_forward(prices.sort_index())
     rets = prices.pct_change(fill_method=None)
-    start = 273
-    if len(prices) < start + rebalance * 3:
+    first = 273
+    if len(prices) < first + rebalance * 3:
         raise ValueError("Need roughly 16+ months of prices for a factor backtest.")
+    if start is not None:
+        first = max(first, int(prices.index.searchsorted(pd.Timestamp(start))))
+    mem = (members.reindex(index=prices.index, columns=prices.columns).fillna(False).astype(bool)
+           if members is not None else None)
     strat, bench, ics, dates, spreads = [], [], [], [], []
     prev_w = pd.Series(dtype=float)
     turnover = []
-    for t in range(start, len(prices) - 1, rebalance):
+    for t in range(first, len(prices) - 1, rebalance):
         pf = price_factor_frame(prices, asof=t)
+        eligible = mem.columns[mem.iloc[t].to_numpy()] if mem is not None else prices.columns
+        pf = pf.loc[pf.index.intersection(eligible)]
         ef = earnings_factor_frame(earnings, asof=prices.index[t]) if earnings else None
         sc = composite_scores(pf, None, None, tw, earn_f=ef)["Composite"].dropna()
         if len(sc) < 10:
@@ -328,11 +338,13 @@ def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile
         sp = period[top].mean(axis=1)
         sp.iloc[0] -= to * 2 * cost_bps / 1e4
         strat.append(sp)
-        bench.append(period.mean(axis=1))
+        bench.append(period[period.columns.intersection(eligible)].mean(axis=1))
         common = sc.index.intersection(fwd.dropna().index)
         ics.append(sc[common].rank().corr(fwd[common].rank()))
         spreads.append(fwd[top].mean() - fwd[bot].mean())
         dates.append(prices.index[t])
+    if not strat:
+        raise ValueError("No month had enough ranked stocks to replay.")
     s = pd.concat(strat)
     b = pd.concat(bench)
     ic = pd.Series(ics, index=dates)
@@ -343,4 +355,43 @@ def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile
         "beat_rate": float(np.mean([a.add(1).prod() > b_.add(1).prod() for a, b_ in zip(strat, bench)])),
         "themes": sorted(k for k, v in tw.items() if v > 0),
         "long_short_spread": float(np.mean(spreads)),
+        "turnover": pd.Series(turnover, index=dates), "beat": pd.Series(
+            [float(a.add(1).prod() > b_.add(1).prod()) for a, b_ in zip(strat, bench)], index=dates),
     }
+
+
+def weight_presets(theme_weights: dict, keep=REPLAYABLE) -> dict:
+    """Candidate theme weights for the walk-forward: yours, and yours with each theme you use doubled."""
+    tw = {k: v for k, v in theme_weights.items() if k in keep and v > 0}
+    out = {"Your weights": tw}
+    if len(tw) > 1:
+        for k in tw:
+            out[f"More {k}"] = {**tw, k: tw[k] * 2}
+    return out
+
+
+def walk_forward(prices: pd.DataFrame, theme_weights: dict | None = None, earnings: dict | None = None,
+                 members: pd.DataFrame | None = None, cost_bps: float = 10.0, progress=None) -> dict:
+    """The monthly top-20% replay graded out of sample: each year the theme weights are picked from
+    ``weight_presets`` on the three years before it, then used for that year's monthly rebalances only."""
+    keep = REPLAYABLE if earnings else tuple(PRICE_FACTORS)
+    tw = DEFAULT_THEME_WEIGHTS if theme_weights is None else theme_weights
+    presets = weight_presets(tw, keep)
+    if not presets["Your weights"]:
+        raise ValueError("Give at least one of the price or earnings themes some weight to replay the ranking.")
+    points = [{"Weights": k} for k in presets]
+
+    def evaluate(d, p, start):
+        res = backtest_price_composite(d["prices"], cost_bps=cost_bps, theme_weights=presets[p["Weights"]],
+                                       earnings=earnings, start=start, members=d["members"])
+        return {"returns": res["strategy"], "benchmark": res["benchmark"], "ic": res["ic"],
+                "turnover": res["turnover"], "beat": res["beat"]}
+
+    dates = prices.sort_index().index
+    wf = walkforward.run(evaluate, {"prices": prices, "members": members}, points,
+                         walkforward.folds(dates, purge=21, first=273), None, progress)
+    ic = wf["ic"]
+    return {**wf, "strategy": wf["returns"], "ic_mean": float(ic.mean()),
+            "ic_t": float(ic.mean() / ic.std() * np.sqrt(len(ic))) if ic.std() > 0 else np.nan,
+            "hit_rate": float((ic > 0).mean()), "avg_turnover": float(wf["turnover"].mean()),
+            "beat_rate": float(wf["beat"].mean()), "themes": sorted(presets["Your weights"])}

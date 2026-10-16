@@ -1,37 +1,12 @@
 """Market dashboard: indices, regime, sector rotation, movers, sentiment."""
 
-from datetime import datetime, time
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import pytz
 import streamlit as st
-from pandas.tseries.holiday import (AbstractHolidayCalendar, GoodFriday, Holiday, USLaborDay, USMartinLutherKingJr,
-                                    USMemorialDay, USPresidentsDay, USThanksgivingDay, nearest_workday)
 
 from sharkfin import data, leader_dip, live, playbook, sentiment, ui
 from sharkfin import indicators as ind
-
-
-
-class NYSECalendar(AbstractHolidayCalendar):
-    rules = [
-        Holiday("New Year", month=1, day=1, observance=nearest_workday), USMartinLutherKingJr, USPresidentsDay,
-        GoodFriday, USMemorialDay, Holiday("Juneteenth", month=6, day=19, start_date="2022-01-01", observance=nearest_workday),
-        Holiday("Independence Day", month=7, day=4, observance=nearest_workday), USLaborDay, USThanksgivingDay,
-        Holiday("Christmas", month=12, day=25, observance=nearest_workday),
-    ]
-
-
-def market_status():
-    ny = datetime.now(pytz.timezone("America/New_York"))
-    holidays = NYSECalendar().holidays(f"{ny.year}-01-01", f"{ny.year}-12-31")
-    is_open = ny.weekday() < 5 and ny.date() not in set(holidays.date) and time(9, 30) <= ny.time() < time(16, 0)
-    pre = ny.weekday() < 5 and time(4, 0) <= ny.time() < time(9, 30)
-    post = ny.weekday() < 5 and time(16, 0) <= ny.time() < time(20, 0)
-    label = "Open" if is_open else "Pre-market" if pre else "After-hours" if post else "Closed"
-    return label, ny
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -40,7 +15,7 @@ def load_overview():
     return data.download_prices(syms, period="1y")
 
 
-status, ny = market_status()
+status, ny = data.market_status()
 ui.header("Market Dashboard", ui.pill(f"NYSE {status}", "pos" if status == "Open" else "neu") +
           f"{ny:%A, %b %d · %I:%M %p} ET")
 

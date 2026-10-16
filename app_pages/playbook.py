@@ -170,23 +170,30 @@ def backtest_summary(stt: dict, bench: dict, bench_name: str, key: str):
     ], key=key)
 
 
-SURVIVOR_NOTE = ("This replay uses today's index members, so stocks that were later dropped (often the big losers) are "
-                 "missing and the results come out higher than the research, which used the members of each date. "
-                 "Trust the research numbers above; use this to see the trades and how the rules behave.")
+SURVIVOR_NOTE = ("Stocks are only ranked and traded on days they were in the S&P 500 (point-in-time membership). "
+                 "Yahoo no longer has prices for some that left, usually takeovers and failures, so a little "
+                 "survivorship bias remains and the results may still run slightly high.")
+YEARS = {"10y": 10, "20y": 20}
+TECH_SURVIVOR_NOTE = ("Stocks are only traded on days they were in the S&P 500, but the tech list comes from today's "
+                      "sector table, so tech names that have since left the index are missing (survivorship bias): "
+                      "expect these results to run high.")
 
 
 # ---- Leader Dip Plus 7 ------------------------------------------------------
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def ld_backtest(years: str, rules: str, cash: str, slots: int, cost_bps: float) -> dict:
-    ohlcv = data.download_ohlcv(tuple(data.universe("S&P 500")), period=years)
+    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=YEARS[years])
+    ohlcv = data.download_ohlcv(tuple(data.sp500_ever(start)), period=years)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
         raise ValueError("Couldn't download prices for the S&P 500 right now.")
     m = live.market_inputs(years)
     if not len(m["spy"]):
         raise ValueError("Couldn't download SPY, which the market switch needs.")
+    members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns)
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
-    return leader_dip.backtest(ohlcv, m["spy"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
-                               cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None, sector_ret3=sr)
+    return leader_dip.walk_forward(ohlcv, m["spy"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
+                                   cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None,
+                                   sector_ret3=sr, members=members)
 
 
 def leader_dip_view():
@@ -237,15 +244,15 @@ def leader_dip_view():
         st.caption("Downloads two years of prices for every S&P 500 stock, so the first scan takes a minute. "
                    "Top Performers → Swing setups shows the same list and logs every signal.")
 
-    with st.expander("Backtest it on today's S&P 500"):
+    with st.expander("Walk-forward test on the S&P 500 of each date"):
         q = st.columns(4)
-        years = q[0].segmented_control("History", ["5y", "10y"], default="5y", key="pb_ld_years") or "5y"
+        years = q[0].segmented_control("History", list(YEARS), default="10y", key="pb_ld_years") or "10y"
         rules_lbl = q[1].selectbox("Rules", list(leader_dip.RULESETS), key="pb_ld_rules")
         cash_lbl = q[2].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), key="pb_ld_cash", help=leader_dip.CASH_HELP)
         slots = q[3].slider("Slots", 3, 15, leader_dip.SLOTS, key="pb_ld_slots", help=tip("ld_slots"))
-        if st.button("Run the backtest", key="pb_ld_run"):
+        if st.button("Run the walk-forward test", key="pb_ld_run"):
             try:
-                with st.spinner("Replaying every day…"):
+                with st.spinner("Downloading every stock that was in the S&P 500, then picking settings year by year…"):
                     res = ld_backtest(years, leader_dip.RULESETS[rules_lbl], leader_dip.CASH_CHOICES[cash_lbl],
                                       int(slots), leader_dip.COST_BPS)
             except ValueError as e:
@@ -257,10 +264,11 @@ def leader_dip_view():
                              go.Scatter(x=eq.index, y=res["spy_equity"] * START, name="SPY", line=dict(color=ui.MUTED, width=1.4))])
             fig.update_layout(title=f"What ${START:,} became", yaxis_type="log", yaxis_tickprefix="$", hovermode="x unified")
             ui.plotly(fig, 340, key="pb_ld_eq")
-            why = res["trades"]["Why it sold"].value_counts(normalize=True)
-            st.caption("How trades ended: " + ", ".join(f"{v:.0%} {k}" for k, v in why.items()) + ".")
+            if len(res["trades"]):
+                why = res["trades"]["Why it sold"].value_counts(normalize=True)
+                st.caption("How trades ended: " + ", ".join(f"{v:.0%} {k}" for k, v in why.items()) + ".")
             trades_table(res["trades"], "pb_ld_tr")
-            st.caption(SURVIVOR_NOTE)
+            ui.walk_forward_table(res, "pb_ld_wf", SURVIVOR_NOTE)
 
 
 def ld_signals(now: pd.DataFrame):
@@ -302,8 +310,10 @@ def br_backtest(years: str, slots: int, cost_bps: float) -> dict:
     m = live.market_inputs(years)
     if not len(m["qqq"]):
         raise ValueError("Couldn't download QQQ, which the tech switch needs.")
-    return breakout_rider.backtest(ohlcv, m["qqq"], tbill_yields=data.tbill_yields(years), slots=slots, cost_bps=cost_bps,
-                                   market_close=m["spy"] if len(m["spy"]) else None)
+    members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns)
+    members[[c for c in breakout_rider.TECH_EXTRA if c in members]] = True  # AMZN and TSLA are always in its universe
+    return breakout_rider.walk_forward(ohlcv, m["qqq"], data.tbill_yields(years), slots, cost_bps,
+                                       market_close=m["spy"] if len(m["spy"]) else None, members=members)
 
 
 def breakout_view():
@@ -349,14 +359,14 @@ def breakout_view():
     else:
         st.caption("Downloads two years of prices for about 100 tech stocks.")
 
-    with st.expander("Backtest it on today's tech stocks"):
+    with st.expander("Walk-forward test on tech stocks"):
         q = st.columns(3)
-        years = q[0].segmented_control("History", ["5y", "10y"], default="5y", key="pb_br_years") or "5y"
+        years = q[0].segmented_control("History", list(YEARS), default="10y", key="pb_br_years") or "10y"
         slots = q[1].slider("Slots", 3, 20, breakout_rider.SLOTS, key="pb_br_slots")
         cost = q[2].number_input("Cost per side (bps)", 0.0, 50.0, breakout_rider.COST_BPS, 1.0, key="pb_br_cost")
-        if st.button("Run the backtest", key="pb_br_run"):
+        if st.button("Run the walk-forward test", key="pb_br_run"):
             try:
-                with st.spinner("Replaying every day…"):
+                with st.spinner("Picking settings year by year and trading each next year…"):
                     res = br_backtest(years, int(slots), float(cost))
             except ValueError as e:
                 st.warning(str(e))
@@ -368,13 +378,13 @@ def breakout_view():
             fig.update_layout(title=f"What ${START:,} became", yaxis_type="log", yaxis_tickprefix="$", hovermode="x unified")
             ui.plotly(fig, 340, key="pb_br_eq")
             tr = res["trades"]
-            done = tr[tr["Why it sold"] != "Open"]
+            done = tr[tr["Why it sold"] != "Open"] if len(tr) else tr
             if len(done):
                 top = done.groupby("Symbol")["Return"].sum().sort_values(ascending=False)
                 st.caption(f"Biggest contributors: {', '.join(f'{s} ({v:+.0%})' for s, v in top.head(5).items())}. "
                            "A trend system's results always hinge on a handful of names.")
             trades_table(tr, "pb_br_tr")
-            st.caption(SURVIVOR_NOTE)
+            ui.walk_forward_table(res, "pb_br_wf", TECH_SURVIVOR_NOTE)
 
 
 def br_signals(now: pd.DataFrame):
@@ -421,8 +431,7 @@ def dn_backtest(days: int) -> dict:
     bars = data.intraday_bars(day_night.SYMBOL, days)
     if bars.empty:
         raise ValueError("Couldn't load TQQQ's intraday bars right now.")
-    daily = data.history(day_night.SYMBOL, "10y")
-    res = day_night.backtest(bars, daily if not daily.empty else None, data.tbill_yields("10y"))
+    res = day_night.walk_forward(bars, data.tbill_yields("10y"))
     res["source"] = bars.attrs.get("source", "")
     return res
 
@@ -445,8 +454,8 @@ def day_night_view():
             "the band.",
             "<b>Get out when it fades.</b> If long, sell at a check once TQQQ is back under the higher of the band and "
             "the day's VWAP. Anything still held sells at the 16:00 close.",
-            "<b>Night leg: buy the weak close.</b> If TQQQ closes in the bottom 20% of the day's high-low range, buy at "
-            "the close (market-on-close) and sell at the next morning's open.",
+            "<b>Night leg: buy the weak close.</b> At 15:30, if TQQQ sits in the bottom 20% of the day's high-low range "
+            "so far, buy at the close (market-on-close orders are due by 15:50) and sell at the next morning's open.",
             "<b>Size it.</b> Each leg uses the whole sleeve, but they never hold at the same time (one is 09:30-16:00, "
             "the other 16:00-09:30). Every trade is a buy: no shorting.",
         ])
@@ -455,7 +464,7 @@ def day_night_view():
                   "Day: when the Nasdaq moves further than usual by a given time of day, the move tends to carry into the "
                   "close. Leveraged ETFs and option dealers have to buy more as prices rise, late in the day. Night: a "
                   "close near the day's low is often an overreaction that partly reverses by the next open. The two legs "
-                  "barely move together (correlation 0.06), so together they beat either one, and the pair made money "
+                  "barely move together (correlation 0.06 over 2016-26, 0.01 over the last 5 years), so together they beat either one, and the pair made money "
                   "in 2022 (+19%) when tech fell a third.", "buy")
         text_card("The risks",
                   "TQQQ is 3x the Nasdaq-100: the pair's worst drop was 30%. The edge is only 0.2-0.3% a trade, so fills "
@@ -474,48 +483,39 @@ def day_night_view():
     else:
         dn_today(t)
 
-    with st.expander("Backtest it on intraday bars"):
-        has_keys = data.alpaca_keys() is not None
-        span = st.segmented_control("History", ["60 days", "1 year", "3 years", "5 years"],
-                                    default="1 year" if has_keys else "60 days", key="pb_dn_span") or "60 days"
-        if not has_keys:
-            st.caption("Without Alpaca keys, intraday history is limited to Yahoo's last 60 days (with an estimated "
-                       "VWAP). The night leg also runs on 10 years of daily bars.")
-        if st.button("Run the backtest", key="pb_dn_run"):
-            days = {"60 days": 60, "1 year": 366, "3 years": 1096, "5 years": 1827}[span]
+    with st.expander("Walk-forward test on intraday bars"):
+        if data.alpaca_keys() is None:
+            st.info("A walk-forward test needs about four years of 30-minute bars: three to pick the settings and one "
+                    "to test them. Yahoo only has the last 60 days, so set Alpaca keys (ALPACA_API_KEY and "
+                    "ALPACA_SECRET_KEY in the app's secrets) to run it.")
+            return
+        span = st.segmented_control("History", ["5 years", "10 years"], default="5 years", key="pb_dn_span") or "5 years"
+        if st.button("Run the walk-forward test", key="pb_dn_run"):
+            days = {"5 years": 1827, "10 years": 3653}[span]
             try:
-                with st.spinner("Loading 30-minute bars and replaying every check…"):
+                with st.spinner("Loading 30-minute bars, then picking settings year by year…"):
                     res = dn_backtest(days)
             except ValueError as e:
                 st.warning(str(e))
                 return
-            rows = []
-            for k, v in res["stats"].items():
-                if v:
-                    rows.append({"": k, "Per year": v["Return per year"], "Sharpe": v["Sharpe"], "Worst drop": v["Worst drop"],
-                                 "Trades a year": v.get("Trades per year"), "Win rate": v.get("Win rate"),
-                                 "Avg trade": v.get("Avg trade"), "Years": v["Years"]})
+            rows = [{"": k, "Per year": v["Return per year"], "Sharpe": v["Sharpe"], "Worst drop": v["Worst drop"],
+                     "Days invested": v.get("Days invested"), "Years": v["Years"]} for k, v in res["stats"].items() if v]
             st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch", key="pb_dn_tab", column_config={
                 "Per year": st.column_config.NumberColumn(format="percent"), "Worst drop": st.column_config.NumberColumn(format="percent"),
-                "Sharpe": st.column_config.NumberColumn(format="%.2f"), "Trades a year": st.column_config.NumberColumn(format="%.0f"),
-                "Win rate": st.column_config.NumberColumn(format="percent"),
-                "Avg trade": st.column_config.NumberColumn(format="percent"), "Years": st.column_config.NumberColumn(format="%.1f")})
-            g = pd.DataFrame({"Day + night": (1 + res["both"]).cumprod(), "Day": (1 + res["day"]).cumprod(),
-                              "Night": (1 + res["night"]).cumprod(), "Hold TQQQ": (1 + res["hold"]).cumprod()}) * START
+                "Sharpe": st.column_config.NumberColumn(format="%.2f"),
+                "Days invested": st.column_config.NumberColumn(format="percent"),
+                "Years": st.column_config.NumberColumn(format="%.1f")})
+            g = pd.DataFrame({"Day + night": res["equity"], "Hold TQQQ": res["hold_equity"]}) * START
             fig = go.Figure()
-            for k, col in (("Day + night", ui.PURPLE), ("Day", ui.BLUE), ("Night", ui.ORANGE), ("Hold TQQQ", ui.MUTED)):
+            for k, col in (("Day + night", ui.PURPLE), ("Hold TQQQ", ui.MUTED)):
                 fig.add_scatter(x=g.index, y=g[k], name=k, line=dict(color=col, width=2 if k == "Day + night" else 1.3,
                                                                     dash="dot" if k == "Hold TQQQ" else None))
-            fig.update_layout(title=f"What ${START:,} became ({res['source']})", yaxis_tickprefix="$", hovermode="x unified")
+            fig.update_layout(title=f"What ${START:,} became in the test years ({res['source']})", yaxis_tickprefix="$",
+                              hovermode="x unified")
             ui.plotly(fig, 340, key="pb_dn_eq")
-            st.dataframe(res["day_trades"].iloc[::-1].head(200), hide_index=True, width="stretch", height=260, key="pb_dn_dt",
-                         column_config={"Date": st.column_config.DateColumn(format="MMM D, YYYY"),
-                                        "Buy price": st.column_config.NumberColumn(format="$%.2f"),
-                                        "Sell price": st.column_config.NumberColumn(format="$%.2f"),
-                                        "Return": st.column_config.NumberColumn(format="percent")})
-            st.caption("Costs: 0.02% per side. Checks use each half-hour bar's close and fill at the next bar's open, the "
-                       "same prices the research's 1-minute replay used (it matched the research's daily returns with "
-                       "a 0.998 correlation over 2016-2026).")
+            ui.walk_forward_table(res, "pb_dn_wf",
+                                  "Costs: 0.02% per side. Day checks use each half-hour bar's close and fill at the next "
+                                  "bar's open; the night leg decides at 15:30 and buys at the close.")
 
 
 def dn_today(t: dict):
@@ -537,9 +537,15 @@ def dn_today(t: dict):
          "delta": f"night buy below {ui.fmt_money(t['night_trigger'])}", "delta_color": "off", "delta_arrow": "off",
          "help": "Where the price sits in today's high-low range. Under 20% at the close triggers the night leg."},
     ], key="pb_dn_now")
-    if t["weak_close"]:
-        st.markdown(ui.pill("Weak close so far", "info") + "<span class='sf-note'>If TQQQ stays in the bottom 20% of "
-                    "today's range into the close, the night leg buys at the close (market-on-close orders are due by "
+    if t.get("night_decided"):
+        st.markdown(ui.pill("Night buy" if t["weak_close"] else "No night trade", "info" if t["weak_close"] else "neu") +
+                    "<span class='sf-note'>Decided at 15:30: TQQQ was "
+                    f"{'in' if t['weak_close'] else 'above'} the bottom 20% of the day's range by then. "
+                    + ("Buy at the close (market-on-close, due by 15:50) and sell at tomorrow's open." if t["weak_close"]
+                       else "The night leg sits out tonight.") + "</span>", unsafe_allow_html=True)
+    elif t["weak_close"]:
+        st.markdown(ui.pill("Weak close so far", "info") + "<span class='sf-note'>If TQQQ is still in the bottom 20% of "
+                    "today's range at 15:30, the night leg buys at the close (market-on-close orders are due by "
                     "15:50) and sells at tomorrow's open.</span>", unsafe_allow_html=True)
     tb = t["bars"]
     x = [pd.Timestamp(t["date"]) + pd.Timedelta(minutes=570 + 30 * int(i)) for i in tb.index]
@@ -629,6 +635,25 @@ def plan_view():
                                 "Worst drop": st.column_config.NumberColumn(format="percent"),
                                 "2022": st.column_config.NumberColumn(format="percent"),
                                 "Volatility": st.column_config.NumberColumn(format="percent")})
+
+    st.subheader("Weights re-picked every year", help="A walk-forward check of the plan's weights.")
+    wfm = pb.walk_forward_mix(d)
+    fixed = pb.stats(series[PLAN].reindex(wfm["returns"].index), d["tbill"])
+    ui.metrics([
+        {"label": "Return per year", "value": pct(wfm["stats"]["Return per year"]),
+         "delta": f"{(wfm['stats']['Return per year'] - fixed['Return per year']) * 100:+.1f} pts vs fixed 50 / 20 / 30"},
+        {"label": "Sharpe ratio", "value": f"{wfm['stats']['Sharpe']:.2f}", "delta": f"fixed {fixed['Sharpe']:.2f}",
+         "delta_color": "off", "delta_arrow": "off"},
+        {"label": "Worst drop", "value": pct(wfm["stats"]["Worst drop"], 0), "delta": f"fixed {pct(fixed['Worst drop'], 0)}",
+         "delta_color": "off", "delta_arrow": "off"},
+    ], key="pb_wfmix")
+    st.dataframe(wfm["folds"], hide_index=True, width="stretch", key="pb_wfmix_tab", column_config={
+        **{k: st.column_config.NumberColumn(k, format="percent") for k in (LD, BR, DN)},
+        "Return": st.column_config.NumberColumn("Return that year", format="percent"),
+        "Sharpe": st.column_config.NumberColumn("Sharpe that year", format="%.2f")})
+    st.caption("Each year's weights were picked on the three years before it only, then held for that year. Only the "
+               "weights are re-picked here: each strategy's own settings come from the research, which picked them on "
+               "2016-21, so the years up to Oct 2021 are still in-sample for the strategies themselves.")
 
     c1, c2 = st.columns([3, 2])
     with c1:
@@ -733,6 +758,9 @@ else:
     plan_view()
 
 st.caption("All research numbers are backtests after trading costs: Leader Dip Plus 7 and Tech Breakout Rider on the "
-           "stocks that were in the S&P 500 on each date, the TQQQ pair on 1-minute bars. Past results don't guarantee "
-           "future ones, and none of this is investment advice. SharkFin never places orders.")
+           "stocks that were in the S&P 500 on each date, the TQQQ pair on 1-minute bars. Their settings were picked on "
+           "earlier data and graded on Oct 2021 - Oct 2026, one walk-forward step; the tests on this page re-pick them "
+           "every year. The research's night leg decided on the 16:00 close itself, which can't be traded, so its night "
+           "numbers run somewhat high. Past results don't guarantee future ones, and none of this is investment advice. "
+           "SharkFin never places orders.")
 ui.disclaimer()

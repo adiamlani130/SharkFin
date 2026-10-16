@@ -1,29 +1,30 @@
 [theme]
 base = "dark"
-primaryColor = "#2dd4a3"
-backgroundColor = "#0a0e14"
-secondaryBackgroundColor = "#121822"
-textColor = "#e6e9ef"
-borderColor = "#1f2836"
-dataframeBorderColor = "#1f2836"
-dataframeHeaderBackgroundColor = "#111722"
-linkColor = "#7cc4ff"
+primaryColor = "#3fa9e0"
+backgroundColor = "#06101a"
+secondaryBackgroundColor = "#0d1b28"
+textColor = "#e4edf3"
+borderColor = "#172a3b"
+dataframeBorderColor = "#152636"
+dataframeHeaderBackgroundColor = "#0b1824"
+linkColor = "#8fcdf2"
 linkUnderline = false
-font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
-headingFont = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
-headingFontWeights = [700, 600, 600, 600, 600, 600]
-headingFontSizes = ["2rem", "1.35rem", "1.12rem", "1rem", "0.95rem", "0.9rem"]
+font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
+headingFont = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
+codeFont = "IBM Plex Mono:https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap, monospace"
+headingFontWeights = [500, 600, 600, 600, 600, 600]
+headingFontSizes = ["2.3rem", "1.3rem", "1.1rem", "1rem", "0.95rem", "0.9rem"]
 baseFontSize = 15
-baseRadius = "0.6rem"
-metricValueFontSize = "1.45rem"
-metricValueFontWeight = 600
+baseRadius = "0.55rem"
+metricValueFontSize = "1.5rem"
+metricValueFontWeight = 500
 showWidgetBorder = true
 chartCategoricalColors = ["#4ea8ff", "#2dd4a3", "#f5a524", "#a78bfa", "#ff5c7a", "#f472b6", "#5eead4", "#facc15"]
 
 [theme.sidebar]
-backgroundColor = "#0d121a"
-secondaryBackgroundColor = "#151c27"
-borderColor = "#1a2230"
+backgroundColor = "#050d16"
+secondaryBackgroundColor = "#0b1824"
+borderColor = "#12212f"
 
 [client]
 toolbarMode = "minimal"

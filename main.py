@@ -42,8 +42,11 @@ if logo.exists():
     st.logo(str(logo), size="large")
 
 pages = {
+    "": [
+        st.Page("app_pages/welcome.py", title="Welcome", default=True),
+    ],
     "Markets": [
-        st.Page("app_pages/home.py", title="Market Dashboard", default=True),
+        st.Page("app_pages/home.py", title="Market Dashboard"),
         st.Page("app_pages/scanner.py", title="Top Performers"),
         st.Page("app_pages/news.py", title="News"),
     ],

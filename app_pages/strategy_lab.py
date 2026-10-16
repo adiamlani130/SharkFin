@@ -1,6 +1,7 @@
 """Strategy Lab: build a trading strategy from indicators, backtest it, compare ideas."""
 
 import itertools
+import json
 
 import numpy as np
 import pandas as pd
@@ -18,7 +19,7 @@ ui.header("Strategy Lab",
 c1, c2, c3 = st.columns([3, 2, 2], vertical_alignment="bottom")
 with c1:
     sym = ui.symbol_picker("lab")
-period = c2.segmented_control("History", ["3y", "5y", "10y", "max"], default="10y", help=tip("history")) or "10y"
+period = c2.segmented_control("History", ["5y", "10y", "max"], default="10y", help=tip("history")) or "10y"
 cost = c3.number_input("Trading cost per trade (bps)", 0.0, 100.0, 5.0, 1.0, help=tip("cost"))
 if not sym:
     st.stop()
@@ -33,6 +34,29 @@ rf = data.risk_free_rate()
 START = 10_000
 
 IND_KEYS = list(builder.INDICATORS)
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def lab_walk_forward(ticker: str, period_: str, rules_json: str, cost_bps: float, rf_: float) -> dict:
+    """Walk-forward test of one rule set on one ticker (cached by its rules)."""
+    h_ = data.history(ticker, period_)
+    if len(h_) < 260:
+        raise ValueError(f"Not enough price history for {ticker}.")
+    m_ = data.market_history(period_)
+    return builder.walk_forward(h_, json.loads(rules_json), cost_bps, rf_, m_["Close"] if not m_.empty else None)
+
+
+def rules_key(s_: dict) -> str:
+    return json.dumps(s_, sort_keys=True, default=float)
+
+
+def split_open_trade(wf: dict, last_day) -> tuple[pd.DataFrame, dict | None]:
+    """The walk-forward's trades, with a position still held on the last day split out as the open trade."""
+    tr = wf["trades"]
+    if len(tr) and tr.iloc[-1]["Exit reason"] == "End of test window" and tr.iloc[-1]["Exit date"] == last_day:
+        last = tr.iloc[-1]
+        return tr.iloc[:-1], {"Entry date": last["Entry date"], "Entry": last["Entry"], "Return": last["Exit"] / last["Entry"] - 1}
+    return tr, None
 RHS_KEYS = [builder.VALUE] + IND_KEYS
 _ids = itertools.count(int(pd.Timestamp.now().timestamp() * 1000))
 
@@ -143,11 +167,14 @@ def build_tab():
         st.info("Add at least one buy rule.")
         return
     try:
-        res = builder.run(hist, s, cost, rf, market)
+        with st.spinner("Picking the rule's numbers year by year, then trading each next year…"):
+            res = lab_walk_forward(sym, period, rules_key(s), float(cost), float(rf))
     except ValueError as e:
-        st.warning(f"{e} Try a longer history or shorter indicator lengths.")
+        st.warning(f"{e} Pick a longer history or shorter indicator lengths.")
         return
     stt = res["stats"]
+    tr, open_trade = split_open_trade(res, hist.index[-1])
+    stt["Trades"] = int(len(tr))
     buy_txt, sell_txt = builder.describe_strategy(s)
     u1, u2 = st.columns([2, 5], vertical_alignment="center")
     if u1.button("Use as my swing strategy", icon=":material/bookmark_add:",
@@ -175,7 +202,8 @@ def build_tab():
             verdict += (f" Only {stt['Trades']} trade{'s' if stt['Trades'] > 1 else ''}, though: "
                         "too few to tell skill from luck.")
     st.markdown(
-        f"<div class='sf-card {cls}'><div class='t'>${end_val:,.0f} from ${START:,} over {stt['Years']:.1f} years</div>"
+        f"<div class='sf-card {cls}'><div class='t'>${end_val:,.0f} from ${START:,} over {stt['Years']:.1f} "
+        f"out-of-sample years</div>"
         f"<div class='row'><b>Buys when</b> {ui.h(buy_txt)}.</div><div class='row'><b>Sells when</b> {ui.h(sell_txt)}.</div>"
         f"<div class='row'>That is {ui.fmt_pct(stt['Return per year'], 1)} a year; buying and holding {sym} turned "
         f"${START:,} into ${bh_val:,.0f} ({ui.fmt_pct(stt['Buy & hold per year'], 1)} a year). "
@@ -201,8 +229,11 @@ def build_tab():
          "delta": f"buy & hold {ui.fmt_num(stt['Buy & hold Sharpe'])}", "delta_color": "off", "delta_arrow": "off",
          "help": tip("Sharpe")},
     ], key="labm", cols=6)
-    if res["open_trade"]:
-        ot = res["open_trade"]
+    tuned_txt = (f"Tuned each year from 80-120% of your numbers: {', '.join(res['knobs'])}." if res["knobs"]
+                 else "No numbers to tune, so your rules ran as set in every test year.")
+    ui.walk_forward_table(res, "lab_wf", tuned_txt)
+    if open_trade:
+        ot = open_trade
         st.caption(f"Currently in a trade: bought {ot['Entry date']:%b %d, %Y} at ${ot['Entry']:,.2f}, "
                    f"{ui.fmt_pct(ot['Return'], 1, True)} so far.".replace("$", "\\$"))
 
@@ -224,15 +255,14 @@ def build_tab():
     for (k_, n_), col in zip(price_ind, palette):
         fig.add_scatter(x=view.index, y=builder.series(hist, k_, n_, market).loc[view.index], name=builder.label(k_, n_),
                         line=dict(width=1.1, color=col), row=1, col=1)
-    tr = res["trades"]
     if not tr.empty:
         fig.add_scatter(x=tr["Entry date"], y=tr["Entry"], mode="markers", name="Buy",
                         marker=dict(symbol="triangle-up", size=10, color=ui.GREEN, line=dict(width=0)), row=1, col=1)
         fig.add_scatter(x=tr["Exit date"], y=tr["Exit"], mode="markers", name="Sell", text=tr["Exit reason"],
                         hovertemplate="%{text}: $%{y:.2f}<extra></extra>",
                         marker=dict(symbol="triangle-down", size=10, color=ui.RED, line=dict(width=0)), row=1, col=1)
-    if res["open_trade"]:
-        fig.add_scatter(x=[res["open_trade"]["Entry date"]], y=[res["open_trade"]["Entry"]], mode="markers", name="Open trade",
+    if open_trade:
+        fig.add_scatter(x=[open_trade["Entry date"]], y=[open_trade["Entry"]], mode="markers", name="Open trade",
                         marker=dict(symbol="triangle-up", size=12, color=ui.GREEN, line=dict(width=2, color="#fff")))
     for (k_, n_), col in zip(lower, palette[::-1]):
         fig.add_scatter(x=view.index, y=builder.series(hist, k_, n_, market).loc[view.index], name=builder.label(k_, n_),
@@ -249,7 +279,7 @@ def build_tab():
                                                  dict(count=2, label="2y", step="year", stepmode="backward"),
                                                  dict(count=5, label="5y", step="year", stepmode="backward"),
                                                  dict(step="all", label="All")],
-                                        bgcolor="#121822", activecolor="#1f2836", font=dict(size=11), y=1.02, x=1,
+                                        bgcolor=ui.PANEL, activecolor=ui.BORDER, font=dict(size=11), y=1.02, x=1,
                                         xanchor="right"), row=1, col=1)
     fig.update_layout(title=f"{sym}: every buy and sell", hovermode="x unified")
     ui.plotly(fig, 520 if lower else 440)
@@ -288,11 +318,10 @@ def build_tab():
         others = st.text_input("Tickers (comma separated)", "SPY, QQQ, MSFT, NVDA, JPM, XOM, KO", key="lab_multi")
         if st.button("Run on these tickers"):
             out = []
-            with st.spinner("Backtesting…"):
+            with st.spinner("Walking the rules forward on each ticker…"):
                 for t in [t.strip().upper() for t in others.split(",") if t.strip()][:15]:
-                    h_ = data.history(t, period)
                     try:
-                        r_ = builder.run(h_, s, cost, rf, market)["stats"]
+                        r_ = lab_walk_forward(t, period, rules_key(s), float(cost), float(rf))["stats"]
                     except (ValueError, KeyError):
                         continue
                     out.append({"Ticker": t, "Strategy / yr": r_["Return per year"], "Buy & hold / yr": r_["Buy & hold per year"],
@@ -319,7 +348,21 @@ with tabs[1]:
                             default=["Above the 200-day", "Golden cross", "MACD momentum", "55-day breakout",
                                      "RSI dip in an uptrend"])
     if chosen:
-        runs = builder.compare_templates(hist, chosen, cost, rf, market)
+        runs = {}
+        with st.spinner("Walking each strategy forward…"):
+            for n in chosen:
+                try:
+                    runs[n] = lab_walk_forward(sym, period, rules_key(builder.template(n)), float(cost), float(rf))
+                except ValueError:
+                    pass
+        if not runs:
+            st.warning("Not enough history for a walk-forward test of these strategies. Pick a longer history.")
+            st.stop()
+        common = max(r_["equity"].index[0] for r_ in runs.values())
+        for r_ in runs.values():  # same test days for every line, so the curves compare fairly
+            for k in ("equity", "bh_equity"):
+                e = r_[k].loc[common:]
+                r_[k] = e / e.iloc[0]
         first = next(iter(runs.values()))
         fig = go.Figure(go.Scatter(x=first["bh_equity"].index, y=first["bh_equity"] * START, name=f"Buy & hold {sym}",
                                    line=dict(color=ui.MUTED, width=2, dash="dot")))
@@ -343,12 +386,14 @@ with tabs[1]:
             "Time in market": st.column_config.NumberColumn(format="percent")})
         best = cdf.iloc[0]["Strategy"]
         st.caption(f"Sorted by Sharpe ratio (return per unit of risk). Best here: {best}. Load any of them in "
-                   "Build and test to tweak the rules.")
+                   "Build and test to tweak the rules. " + ui.WALK_FORWARD_NOTE)
 
 # ---------------------------------------------------------------------------
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: float, rules: str = "plus") -> dict:
-    syms_ = tuple(data.universe(universe))
+    point_in_time = universe == "S&P 500"
+    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=int(years.rstrip("y")))
+    syms_ = tuple(data.sp500_ever(start) if point_in_time else data.universe(universe))
     ohlcv = data.download_ohlcv(syms_, period=years)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
         raise ValueError("Couldn't download prices for the index right now.")
@@ -356,9 +401,11 @@ def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: f
     if mkt.empty:
         raise ValueError("Couldn't download SPY, which the market switch needs.")
     m = live.market_inputs(years)
+    members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns) if point_in_time else None
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
-    return leader_dip.backtest(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
-                               cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None, sector_ret3=sr)
+    return leader_dip.walk_forward(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
+                                   cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None,
+                                   sector_ret3=sr, members=members)
 
 
 def leader_dip_tab():
@@ -374,7 +421,7 @@ def leader_dip_tab():
     q = st.columns(5)
     universe = q[0].selectbox("Stocks", ["S&P 500", "Nasdaq-100"], key="ld_uni")
     rules_label = q[1].selectbox("Rules", list(leader_dip.RULESETS), key="ld_rules")
-    years = q[2].segmented_control("History", ["5y", "10y"], default="10y", key="ld_years") or "10y"
+    years = q[2].segmented_control("History", ["10y", "20y"], default="10y", key="ld_years") or "10y"
     cash_label = q[3].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=0, key="ld_cash",
                                 help=leader_dip.CASH_HELP)
     rules_key = leader_dip.RULESETS[rules_label]
@@ -387,7 +434,7 @@ def leader_dip_tab():
         return
     st.session_state.ld_ran = True
     try:
-        with st.spinner(f"Downloading the {universe} and replaying every day…"):
+        with st.spinner(f"Downloading the {universe}, then picking settings year by year…"):
             res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost), rules_key)
     except ValueError as e:
         st.warning(str(e))
@@ -429,8 +476,9 @@ def leader_dip_tab():
     fig.update_layout(title="Share of the account in Leader Dip trades (1-month average)", yaxis=dict(ticksuffix="%", range=[0, 100]))
     ui.plotly(fig, 220)
 
+    ui.walk_forward_table(res, "ld_wf")
     tr = res["trades"]
-    mine = tr[tr["Symbol"] == sym]
+    mine = tr[tr["Symbol"] == sym] if len(tr) else tr
     if len(mine):
         st.caption(f"{sym} was traded {len(mine)} times in this backtest; those trades are marked below.")
         view = hist.loc[max(hist.index[0], res["equity"].index[0]):]
@@ -461,11 +509,9 @@ def leader_dip_tab():
         st.markdown("**Year by year**")
         st.dataframe(ytab, width="stretch", column_config={
             "Leader Dip": st.column_config.NumberColumn(format="percent"), "SPY": st.column_config.NumberColumn(format="percent")})
-    st.caption("This uses today's index members, so stocks that were dropped (often the big losers) are missing, which "
-               "flatters a strength-based system like this one. SharkFin's research ran it on the members of each date: "
-               "Plus 7 made 33.1% a year over the last 5 years (Sharpe 1.40, worst drop 18%) and 16.5% a year in "
-               "2000-12; the classic rules with cash in T-bills made about 12-13% a year. Expect results closer to the "
-               "research than to a perfect-hindsight run.")
+    st.caption("S&P 500: stocks are only ranked and traded on days they were in the index. Yahoo no longer has prices "
+               "for some that left (usually takeovers and failures), so a little survivorship bias remains. Nasdaq-100: "
+               "SharkFin has no membership history for it, so it uses today's members and the results run high.")
 
 
 with tabs[2]:

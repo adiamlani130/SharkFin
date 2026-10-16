@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
-from . import swing_engine
+from . import swing_engine, walkforward
 
 RSI_DAYS = 2
 BUY_BELOW = 10.0
@@ -113,7 +113,8 @@ def _align(s: pd.Series | None, index: pd.Index) -> pd.Series | None:
     s = s.astype(float).copy()
     s.index = pd.DatetimeIndex(s.index).normalize()
     s = s[~s.index.duplicated(keep="last")]
-    return s.reindex(s.index.union(pd.DatetimeIndex(index).normalize())).ffill().reindex(pd.DatetimeIndex(index).normalize()).set_axis(index)
+    full = s.reindex(s.index.union(pd.DatetimeIndex(index).normalize()))
+    return walkforward.carry_forward(full).reindex(pd.DatetimeIndex(index).normalize()).set_axis(index)
 
 
 def market_on(market_close: pd.Series | None, vix: pd.Series | None = None) -> pd.Series:
@@ -141,17 +142,28 @@ def sector_returns(index: pd.Index, columns: pd.Index, sector_etf: dict | pd.Ser
     return pd.DataFrame({c: r[m[c]] if m.get(c) in r else np.nan for c in columns}, index=index)
 
 
-def signal_frames(close: pd.DataFrame) -> dict:
+def _members(members: pd.DataFrame | None, like: pd.DataFrame) -> pd.DataFrame | None:
+    """Point-in-time membership aligned to a panel (False where unknown)."""
+    if members is None:
+        return None
+    return members.reindex(index=like.index, columns=like.columns).fillna(False).astype(bool)
+
+
+def signal_frames(close: pd.DataFrame, buy_below: float = BUY_BELOW, members: pd.DataFrame | None = None) -> dict:
     """Classic Leader Dip inputs and signals for a panel of closes (dates x tickers).
 
     The strength rank is each stock's 6-month gain ranked against the other columns that day, so pass the
-    whole index, not a handful of tickers."""
+    whole index, not a handful of tickers. With ``members`` (point-in-time index membership) a stock is only
+    ranked against, and can only be bought while it is, a member that day."""
     close = close.astype(float)
     rsi2 = ind.rsi(close, RSI_DAYS)
     sma200 = ind.sma(close, TREND_DAYS)
     gain = six_month_gain(close)
-    rank = gain.rank(axis=1, pct=True)
-    buy = (rsi2 < BUY_BELOW) & (close > sma200) & (rank > STRENGTH_MIN)
+    mem = _members(members, close)
+    rank = (gain.where(mem) if mem is not None else gain).rank(axis=1, pct=True)
+    buy = (rsi2 < buy_below) & (close > sma200) & (rank > STRENGTH_MIN)
+    if mem is not None:
+        buy &= mem
     return {"rsi2": rsi2, "sma200": sma200, "gain": gain, "rank": rank, "buy": buy.fillna(False),
             "sell": (rsi2 > SELL_ABOVE).fillna(False), "limit": close * LIMIT}
 
@@ -172,15 +184,16 @@ def quality_points(ohlc: dict, vix: pd.Series | None = None, sector_ret3: pd.Dat
     return {"parts": parts, "count": sum(p.astype(int) for p in parts.values()), "atr": atr}
 
 
-def plus_frames(ohlc: dict, vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> dict:
+def plus_frames(ohlc: dict, vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None,
+                buy_below: float = BUY_BELOW, target_atr: float = TARGET_ATR, members: pd.DataFrame | None = None) -> dict:
     """Leader Dip Plus signals for an OHLC panel: the classic signal plus a quality point, the profit target
     and the exit signal."""
-    base = signal_frames(ohlc["Close"])
+    base = signal_frames(ohlc["Close"], buy_below, members)
     q = quality_points(ohlc, vix, sector_ret3)
     c = ohlc["Close"].astype(float)
     below = (c < base["sma200"]).fillna(False)
     return {**base, "quality": q["count"], "quality_parts": q["parts"], "atr": q["atr"],
-            "buy": base["buy"] & (q["count"] >= 1), "target": c + TARGET_ATR * q["atr"],
+            "buy": base["buy"] & (q["count"] >= 1), "target": c + target_atr * q["atr"],
             "exit": base["sell"] | below, "below200": below}
 
 
@@ -371,19 +384,21 @@ def regime(market_close: pd.Series, vix: pd.Series | None = None) -> dict:
 
 def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbill_yields: pd.Series | None = None,
              slots: int = SLOTS, cost_bps: float = COST_BPS, start=None, rules: str = "plus",
-             vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> dict:
+             vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None, buy_below: float = BUY_BELOW,
+             target_atr: float = TARGET_ATR, members: pd.DataFrame | None = None, liquidate: bool = False) -> dict:
     """Run Leader Dip on a panel {"Open"|"High"|"Low"|"Close": dates x tickers}.
 
     ``rules`` is "plus" (quality points, profit target, 200-day exit, panic-aware switch) or "classic".
     Orders are decided at the close of day t and executed on day t+1 (see ``swing_engine``). Idle cash earns
     ``cash``: "spy_trend" (SPY when it closed above its 200-day the day before, T-bills otherwise), "tbills"
-    or "spy". ``cost_bps`` is charged on each buy and each sell."""
-    C = ohlcv["Close"].astype(float).sort_index()
-    C = C.loc[:, C.notna().sum() > TREND_DAYS]
+    or "spy". ``cost_bps`` is charged on each buy and each sell. ``members`` limits trading and ranking to
+    point-in-time index members. One fixed set of settings over the whole span is an in-sample test: use
+    ``walk_forward`` for out-of-sample results."""
+    C = ohlcv["Close"].astype(float).sort_index().dropna(axis=1, how="all")
     dates = C.index
     panel = {f: ohlcv[f].reindex(index=dates, columns=C.columns).astype(float) for f in ("Open", "High", "Low")}
     panel["Close"] = C
-    m = market_close.astype(float).reindex(dates.union(market_close.index)).ffill().reindex(dates)
+    m = walkforward.carry_forward(market_close.astype(float).reindex(dates.union(market_close.index))).reindex(dates)
     plus = rules == "plus"
     gate = market_on(m, vix if plus else None).to_numpy()
     spy_r = m.pct_change(fill_method=None).fillna(0.0).to_numpy()
@@ -396,17 +411,18 @@ def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbil
     if len(dates) - t0 < 30:
         raise ValueError("Not enough price history for a Leader Dip backtest (needs about a year).")
     if plus:
-        sig = plus_frames(panel, vix, sector_ret3)
+        sig = plus_frames(panel, vix, sector_ret3, buy_below, target_atr, members)
         labels = pd.DataFrame(np.where(sig["sell"].to_numpy(), "RSI(2) above 70",
                                        np.where(sig["below200"].to_numpy(), "Closed under 200-day", "")),
                               index=dates, columns=C.columns)
         run = swing_engine.run(panel, sig["buy"], sig["gain"], gate, cash_r, exit_signal=sig["exit"], limit=sig["limit"],
                                target=sig["target"], max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0,
-                               exit_labels=labels)
+                               exit_labels=labels, liquidate=liquidate)
     else:
-        sig = signal_frames(C)
+        sig = signal_frames(C, buy_below, members)
         run = swing_engine.run(panel, sig["buy"], sig["gain"], gate, cash_r, exit_signal=sig["sell"], limit=sig["limit"],
-                               max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="RSI(2) above 70")
+                               max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="RSI(2) above 70",
+                               liquidate=liquidate)
     equity, tr = run["equity"], run["trades"]
     spy_eq = pd.Series(np.cumprod(1 + spy_r[t0:]) / (1 + spy_r[t0]), index=dates[t0:])
     ew_r = C.pct_change(fill_method=None).iloc[t0:].mean(axis=1).fillna(0.0)
@@ -419,6 +435,54 @@ def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbil
 
 
 stats = swing_engine.stats
+
+RSI_GRID = (5.0, 10.0, 15.0)
+TARGET_GRID = (1.0, 1.5, 2.0)
+
+
+def walk_forward(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbill_yields: pd.Series | None = None,
+                 slots: int = SLOTS, cost_bps: float = COST_BPS, rules: str = "plus", vix: pd.Series | None = None,
+                 sector_ret3: pd.DataFrame | None = None, members: pd.DataFrame | None = None,
+                 progress=None) -> dict:
+    """Leader Dip graded out of sample: each year's RSI(2) level (and, for Plus, profit target) is picked on the
+    three years before it (see ``walkforward``), then traded on that year only. The purge gap is the
+    10-day holding limit."""
+    plus = rules == "plus"
+    points = walkforward.grid(**({"RSI(2) below": RSI_GRID, "Target ATR": TARGET_GRID} if plus
+                                 else {"RSI(2) below": RSI_GRID}))
+    data = {"ohlcv": ohlcv, "market": market_close, "vix": vix, "sector": sector_ret3, "tbill": tbill_yields,
+            "members": members}
+
+    def evaluate(d, p, start):
+        res = backtest(d["ohlcv"], d["market"], cash, d["tbill"], slots, cost_bps, start=start, rules=rules,
+                       vix=d["vix"], sector_ret3=d["sector"], buy_below=p["RSI(2) below"],
+                       target_atr=p.get("Target ATR", TARGET_ATR), members=d["members"], liquidate=True)
+        return {"returns": res["returns"], "trades": res["trades"], "exposure": res["exposure"]}
+
+    dates = ohlcv["Close"].sort_index().index
+    rf = pd.Series(swing_engine.daily_cash(dates, tbill_yields), index=dates)
+    wf = walkforward.run(evaluate, data, points, walkforward.folds(dates, purge=MAX_DAYS, first=TREND_DAYS), rf, progress)
+    return _with_benchmarks(wf, market_close, rf, ohlcv["Close"], members)
+
+
+def _with_benchmarks(wf: dict, market_close: pd.Series, rf: pd.Series, close: pd.DataFrame,
+                     members: pd.DataFrame | None) -> dict:
+    """Add SPY and an equal-weight basket of the index members over exactly the walk-forward's test days."""
+    r = wf["returns"]
+    rf_s = rf.reindex(r.index).fillna(0.0)
+    spy_r = market_close.astype(float).pct_change(fill_method=None).reindex(r.index).fillna(0.0)
+    c = close.sort_index().astype(float)
+    ew = c.pct_change(fill_method=None)
+    if members is not None:
+        ew = ew.where(members.reindex(index=ew.index, columns=ew.columns).fillna(False).astype(bool).shift(1, fill_value=False))
+    ew_r = ew.mean(axis=1).reindex(r.index).fillna(0.0)
+    for name, br in (("spy", spy_r), ("basket", ew_r)):
+        br.iloc[0] = 0.0
+        wf[f"{name}_equity"] = (1 + br).cumprod()
+        wf[f"{name}_stats"] = stats(wf[f"{name}_equity"], rf_s)
+    wf["stats"] = stats(wf["equity"], rf_s, wf["trades"] if len(wf["trades"]) else None)
+    wf["symbols"] = int(c.shape[1])
+    return wf
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +519,7 @@ def follow_up(log: pd.DataFrame, ohlcv: dict) -> pd.DataFrame:
             rows.append(out)
             continue
         fill = float(min(o.iloc[t_in], limit)) if np.isfinite(o.iloc[t_in]) else limit
+        at_open = bool(np.isfinite(o.iloc[t_in]) and o.iloc[t_in] <= limit)  # else it filled somewhere in the day
         out.update({"Filled": True, "Fill price": fill})
         tgt = float(s["Target"]) if "Target" in s and pd.notna(s.get("Target")) else np.nan
         r2 = ind.rsi(c, RSI_DAYS)
@@ -467,7 +532,7 @@ def follow_up(log: pd.DataFrame, ohlcv: dict) -> pd.DataFrame:
                                 "Status": "Closed"})
                     done = True
                     break
-                if np.isfinite(hi.iloc[t]) and hi.iloc[t] >= tgt:
+                if np.isfinite(hi.iloc[t]) and hi.iloc[t] >= tgt and (t > t_in or at_open):
                     out.update({"Exit date": c.index[t], "Exit price": tgt, "Return": tgt / fill - 1, "Status": "Closed"})
                     done = True
                     break
