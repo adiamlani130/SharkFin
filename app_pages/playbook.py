@@ -182,16 +182,18 @@ TECH_SURVIVOR_NOTE = ("Stocks are only traded on days they were in the S&P 500, 
 # ---- Leader Dip Plus 7 ------------------------------------------------------
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def ld_backtest(years: str, rules: str, cash: str, slots: int, cost_bps: float) -> dict:
-    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=YEARS[years])
-    ohlcv = data.download_ohlcv(tuple(data.sp500_ever(start)), period=years)
+    n = YEARS[years]
+    period = data.yahoo_period(n)
+    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=n)
+    ohlcv = data.last_years(data.download_ohlcv(tuple(data.sp500_ever(start)), period=period), n)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
         raise ValueError("Couldn't download prices for the S&P 500 right now.")
-    m = live.market_inputs(years)
+    m = live.market_inputs(period)
     if not len(m["spy"]):
         raise ValueError("Couldn't download SPY, which the market switch needs.")
     members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns)
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
-    return leader_dip.walk_forward(ohlcv, m["spy"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
+    return leader_dip.walk_forward(ohlcv, m["spy"], cash=cash, tbill_yields=data.tbill_yields(period), slots=slots,
                                    cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None,
                                    sector_ret3=sr, members=members)
 
@@ -304,15 +306,17 @@ def ld_signals(now: pd.DataFrame):
 # ---- Tech Breakout Rider ----------------------------------------------------
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def br_backtest(years: str, slots: int, cost_bps: float) -> dict:
-    ohlcv = data.download_ohlcv(tuple(breakout_rider.tech_universe(data.sp500_table())), period=years)
+    n = YEARS[years]
+    period = data.yahoo_period(n)
+    ohlcv = data.last_years(data.download_ohlcv(tuple(breakout_rider.tech_universe(data.sp500_table())), period=period), n)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
         raise ValueError("Couldn't download prices for the tech stocks right now.")
-    m = live.market_inputs(years)
+    m = live.market_inputs(period)
     if not len(m["qqq"]):
         raise ValueError("Couldn't download QQQ, which the tech switch needs.")
     members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns)
     members[[c for c in breakout_rider.TECH_EXTRA if c in members]] = True  # AMZN and TSLA are always in its universe
-    return breakout_rider.walk_forward(ohlcv, m["qqq"], data.tbill_yields(years), slots, cost_bps,
+    return breakout_rider.walk_forward(ohlcv, m["qqq"], data.tbill_yields(period), slots, cost_bps,
                                        market_close=m["spy"] if len(m["spy"]) else None, members=members)
 
 
