@@ -22,6 +22,13 @@ if not sym:
     st.stop()
 
 with st.spinner(f"Loading {sym}…"):
+    # Everything the page reads, fetched side by side instead of one after another as the page reaches it.
+    data.prefetch([(data.info, (sym,)), (data.history, (sym, "5y")), (data.financials, (sym,)),
+                   (data.quarterly_financials, (sym,)), (data.analyst_data, (sym,)), (data.market_history, ("5y",)),
+                   (data.download_prices, ((sym, "^GSPC"),), {"period": "3y"}),
+                   (data.download_prices, (tuple(data.universe("S&P 500")),), {"period": "2y"}),
+                   (data.download_prices, (tuple(data.SECTOR_ETFS.values()),), {"period": "2y"}),
+                   (live.market_inputs, ())])
     inf = data.info(sym)
     hist = data.history(sym, "5y")
 

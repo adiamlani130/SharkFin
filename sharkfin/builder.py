@@ -114,9 +114,18 @@ def label(key: str, n: int | None) -> str:
     return i.label.replace("{n}", str(int(n))) if "{n}" in i.label else i.label
 
 
-def series(ohlcv: pd.DataFrame, key: str, n: int | None, market: pd.Series | None = None) -> pd.Series:
+def series(ohlcv: pd.DataFrame, key: str, n: int | None, market: pd.Series | None = None,
+           memo: dict | None = None) -> pd.Series:
+    """An indicator for the strategy's data. ``memo`` (a dict kept for one walk-forward) saves recomputing it
+    for every setting tried on the same window."""
     i = INDICATORS[key]
-    return i.fn(ohlcv, int(n) if n else i.default_n, market).astype(float)
+    n = int(n) if n else i.default_n
+    if memo is None:
+        return i.fn(ohlcv, n, market).astype(float)
+    k = (id(ohlcv), len(ohlcv), ohlcv.index[-1] if len(ohlcv) else None, id(market), key, n)
+    if k not in memo:
+        memo[k] = i.fn(ohlcv, n, market).astype(float)
+    return memo[k]
 
 
 def _fmt_value(v: float) -> str:
@@ -150,8 +159,8 @@ def describe_strategy(s: dict) -> tuple[str, str]:
     return buy, sell
 
 
-def condition_mask(ohlcv: pd.DataFrame, c: dict, market: pd.Series | None = None) -> pd.Series:
-    lhs = series(ohlcv, c["ind"], c.get("n"), market)
+def condition_mask(ohlcv: pd.DataFrame, c: dict, market: pd.Series | None = None, memo: dict | None = None) -> pd.Series:
+    lhs = series(ohlcv, c["ind"], c.get("n"), market, memo)
     if c["op"] in UNARY:
         k = int(c.get("lookback") or 5)
         out = lhs > lhs.shift(k) if c["op"] == "is rising" else lhs < lhs.shift(k)
@@ -159,7 +168,7 @@ def condition_mask(ohlcv: pd.DataFrame, c: dict, market: pd.Series | None = None
     if c.get("rhs", VALUE) == VALUE:
         rhs = pd.Series(float(c.get("value", 0)), index=ohlcv.index)
     else:
-        rhs = series(ohlcv, c["rhs"], c.get("rn"), market)
+        rhs = series(ohlcv, c["rhs"], c.get("rn"), market, memo)
     above, below = lhs > rhs, lhs < rhs
     op = c["op"]
     if op == "is above":
@@ -175,9 +184,10 @@ def condition_mask(ohlcv: pd.DataFrame, c: dict, market: pd.Series | None = None
     return out.fillna(False)
 
 
-def signals(ohlcv: pd.DataFrame, s: dict, market: pd.Series | None = None) -> tuple[pd.Series, pd.Series]:
+def signals(ohlcv: pd.DataFrame, s: dict, market: pd.Series | None = None,
+            memo: dict | None = None) -> tuple[pd.Series, pd.Series]:
     idx = ohlcv.index
-    ent = [condition_mask(ohlcv, c, market) for c in s.get("entry", [])]
+    ent = [condition_mask(ohlcv, c, market, memo) for c in s.get("entry", [])]
     if ent:
         entry = pd.concat(ent, axis=1).all(axis=1) if s.get("logic", "ALL") == "ALL" else pd.concat(ent, axis=1).any(axis=1)
     else:
@@ -185,7 +195,7 @@ def signals(ohlcv: pd.DataFrame, s: dict, market: pd.Series | None = None) -> tu
     if s.get("market_filter") and market is not None and len(market):
         m = walkforward.carry_forward(market.reindex(market.index.union(idx))).reindex(idx)
         entry &= (m > ind.sma(m, 200)).fillna(False)
-    ex = [condition_mask(ohlcv, c, market) for c in s.get("exit", [])]
+    ex = [condition_mask(ohlcv, c, market, memo) for c in s.get("exit", [])]
     exit_ = pd.concat(ex, axis=1).any(axis=1) if ex else pd.Series(False, index=idx)
     return entry.astype(bool), exit_.astype(bool)
 
@@ -201,13 +211,15 @@ def warmup(s: dict) -> int:
 
 
 def run(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float = 0.0,
-        market: pd.Series | None = None, start: pd.Timestamp | None = None, liquidate: bool = False) -> dict:
+        market: pd.Series | None = None, start: pd.Timestamp | None = None, liquidate: bool = False,
+        memo: dict | None = None, light: bool = False) -> dict:
     """Simulate the strategy. Returns daily returns, equity, trades, stats and the
     buy-and-hold comparison over exactly the same dates. ``liquidate`` sells anything still held at the last
-    close (with costs), as a walk-forward test window does. One fixed rule set over the whole span is an
-    in-sample test: ``walk_forward`` gives the out-of-sample version."""
+    close (with costs), as a walk-forward test window does. ``light`` returns only the daily returns and trades
+    (all a walk-forward needs). One fixed rule set over the whole span is an in-sample test: ``walk_forward``
+    gives the out-of-sample version."""
     d = ohlcv.dropna(subset=["Open", "High", "Low", "Close"])
-    entry, exit_ = signals(d, s, market)
+    entry, exit_ = signals(d, s, market, memo)
     first = max(warmup(s), 1)
     if start is not None:
         first = max(first, int(d.index.searchsorted(start)))
@@ -274,6 +286,9 @@ def run(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float = 0.0,
     idx = d.index[first:]
     equity = pd.Series(eq, index=idx)
     rets = equity.pct_change().fillna(equity.iloc[0] - 1)
+    if light:
+        return {"returns": rets, "trades": pd.DataFrame(trades, columns=["Entry date", "Entry", "Exit date", "Exit",
+                                                                           "Return", "Days", "Exit reason"])}
     bh = d["Close"].iloc[first:] / d["Close"].iloc[first]
     bh_rets = bh.pct_change().fillna(0.0)
     open_trade = None
@@ -438,9 +453,11 @@ def walk_forward(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float 
     first = max(warmup(tuned(s, p)) for p in points)
     hold = int(s.get("max_days") or 0)
 
+    memo = {}  # indicators per window, shared by every setting tried on it
+
     def evaluate(data, p, start):
-        res = run(data["ohlcv"], tuned(s, p), cost_bps, rf, data["market"], start=start, liquidate=True)
-        return {"returns": res["returns"], "trades": res["trades"]}
+        return run(data["ohlcv"], tuned(s, p), cost_bps, rf, data["market"], start=start, liquidate=True,
+                   memo=memo, light=True)
 
     rf_s = pd.Series(rf / 252, index=d.index)
     wf = walkforward.run(evaluate, {"ohlcv": d, "market": market}, points,
