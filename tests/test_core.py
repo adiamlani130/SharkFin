@@ -638,3 +638,37 @@ def test_breakout_rider_signals_need_a_new_high():
     assert (sig["Price"] > sig["20-day high"]).all() and (sig["ADX"] > breakout_rider.ADX_MIN).all()
     res = breakout_rider.backtest(ohlc, fakes.history("QQQ")["Close"])
     assert {"equity", "trades", "stats"}.issubset(res) and res["equity"].iloc[0] > 0
+
+
+def test_price_panel_is_kept_on_disk_and_only_topped_up(monkeypatch, tmp_path):
+    import pickle
+    import time
+
+    from sharkfin import data
+
+    monkeypatch.setattr(data, "PANEL_DIR", tmp_path)
+    syms = tuple(f"S{i}" for i in range(25))
+    days = pd.bdate_range("2024-01-01", periods=300)
+    price = lambda idx: pd.DataFrame(np.add.outer(np.arange(len(idx)) + 100.0, np.zeros(len(syms))), index=idx,
+                                     columns=list(syms))
+    full, new_days = price(days), pd.bdate_range(days[-3], periods=5)
+    recent = price(new_days) + 297  # the same values as ``full`` on the 3 overlapping days
+    recent["S0"] *= 0.5             # S0 split since the copy was saved: its past was re-adjusted
+    calls = []
+
+    def fetch(s, period):
+        calls.append((len(s), period))
+        return {"Close": (recent if period == "5d" else full)[list(s)]}
+
+    data._cached_panel("t", syms, "2y", fetch, "Close")
+    data._cached_panel("t", syms, "2y", fetch, "Close")
+    assert calls == [(25, "2y")]  # the second call came from disk
+    path = data._panel_file("t", syms, "2y")
+    with open(path, "rb") as f:
+        _, frames = pickle.load(f)
+    with open(path, "wb") as f:
+        pickle.dump((time.time() - 3600, frames), f)  # an hour old: top it up
+    out = data._cached_panel("t", syms, "2y", fetch, "Close")["Close"]
+    assert calls[1:] == [(25, "5d"), (1, "2y")]  # only the latest days, plus S0 again in full
+    assert out.index[-1] == new_days[-1] and not out.index.duplicated().any()
+    assert out["S1"].iloc[-1] == recent["S1"].iloc[-1]

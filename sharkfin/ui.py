@@ -47,9 +47,6 @@ CSS = """
 /* ---------- layout ---------- */
 .block-container {padding-top: 2.6rem; padding-bottom: 3.5rem; max-width: 1320px;}
 @media (max-width: 900px) {.block-container {padding-left: 1rem; padding-right: 1rem; padding-top: 1.4rem;}}
-[data-testid="stMainBlockContainer"] {animation: sf-in .45s ease-out both;}
-@keyframes sf-in {from {opacity: 0;} to {opacity: 1;}}
-@media (prefers-reduced-motion: reduce) {[data-testid="stMainBlockContainer"] {animation: none;}}
 h2, h3, h4 {letter-spacing: -0.008em;}
 [data-testid="stHeading"] h2, [data-testid="stHeading"] h3 {padding-top: 1.1rem;}
 hr {margin: 1.4rem 0 !important; border-color: #172a3b !important;}

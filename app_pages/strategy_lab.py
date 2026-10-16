@@ -392,18 +392,20 @@ with tabs[1]:
 @st.cache_data(ttl=12 * 3600, show_spinner=False)
 def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: float, rules: str = "plus") -> dict:
     point_in_time = universe == "S&P 500"
-    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=int(years.rstrip("y")))
+    n = int(years.rstrip("y"))
+    period = data.yahoo_period(n)
+    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=n)
     syms_ = tuple(data.sp500_ever(start) if point_in_time else data.universe(universe))
-    ohlcv = data.download_ohlcv(syms_, period=years)
+    ohlcv = data.last_years(data.download_ohlcv(syms_, period=period), n)
     if "Close" not in ohlcv or ohlcv["Close"].shape[1] < 10:
         raise ValueError("Couldn't download prices for the index right now.")
-    mkt = data.market_history(years)
+    mkt = data.market_history(period)
     if mkt.empty:
         raise ValueError("Couldn't download SPY, which the market switch needs.")
-    m = live.market_inputs(years)
+    m = live.market_inputs(period)
     members = data.sp500_members(ohlcv["Close"].index, ohlcv["Close"].columns) if point_in_time else None
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
-    return leader_dip.walk_forward(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(years), slots=slots,
+    return leader_dip.walk_forward(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(period), slots=slots,
                                    cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None,
                                    sector_ret3=sr, members=members)
 

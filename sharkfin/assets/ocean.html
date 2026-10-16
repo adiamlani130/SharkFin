@@ -11,12 +11,16 @@
 <canvas id="sea" aria-hidden="true"></canvas>
 <script>
 /* The SharkFin landing sea: swell lines drawn far to near, each one filling the water below it so nearer
-   swells hide the ones behind, with a moon glint and a fin that crosses now and then. */
+   swells hide the ones behind, with a moon glint and a fin that crosses now and then.
+   Kept light: the still sky is painted once per resize, each swell only fills the strip down to the next one,
+   glints are batched into a few strokes, and it redraws at 30 frames a second at most. */
 (() => {
   const cv = document.getElementById("sea");
   const ctx = cv.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
-  let W = 0, H = 0, dpr = 1, stars = [];
+  let W = 0, H = 0, dpr = 1, sky = null;
+  const FRAME_MS = 1000 / 30;
+  const MAX_SWELL = 1.65;                                // the largest |swell()| can get
 
   const SKY_TOP = [4, 11, 19], SKY_LOW = [14, 38, 58];
   const WATER_FAR = [13, 34, 52], WATER_NEAR = [4, 12, 21];
@@ -27,15 +31,41 @@
   const rgb = (c, a = 1) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
 
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     W = window.innerWidth; H = window.innerHeight;
     cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    sky = paintSky();
+    draw(lastT);
+  }
+
+  // The still part of the scene (sky, stars, moon, haze), painted once into its own canvas.
+  function paintSky() {
+    const c = document.createElement("canvas");
+    c.width = cv.width; c.height = Math.round((horizon() + 32) * dpr);
+    const g = c.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const hz = horizon(), mx = moonX(), my = hz * 0.42;
+    const grad = g.createLinearGradient(0, 0, 0, hz);
+    grad.addColorStop(0, rgb(SKY_TOP)); grad.addColorStop(1, rgb(SKY_LOW));
+    g.fillStyle = grad; g.fillRect(0, 0, W, hz + 32);
     let seed = 7;
     const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
-    stars = Array.from({length: Math.round(W * H / 9000)}, () => ({x: rnd() * W, y: rnd() * H * 0.5, r: rnd() * 0.9 + 0.2,
-                                                                    a: rnd() * 0.5 + 0.1, p: rnd() * 6.28}));
-    if (still) draw(14);
+    for (let i = 0, n = Math.round(W * H / 9000); i < n; i++) {
+      const x = rnd() * W, y = rnd() * H * 0.5, r = rnd() * 0.9 + 0.2, a = rnd() * 0.5 + 0.1;
+      g.fillStyle = `rgba(220,236,246,${a * Math.min(1, (hz - y) / (hz * 0.5))})`;
+      g.fillRect(x, y, r, r);
+    }
+    const halo = g.createRadialGradient(mx, my, 0, mx, my, H * 0.45);
+    halo.addColorStop(0, "rgba(160,205,232,0.20)"); halo.addColorStop(1, "rgba(160,205,232,0)");
+    g.fillStyle = halo; g.fillRect(0, 0, W, hz + 2);
+    g.beginPath(); g.arc(mx, my, Math.max(12, Math.min(W, H) * 0.022), 0, 6.283);
+    g.fillStyle = "rgba(238,244,246,0.95)"; g.fill();
+    const glow = g.createLinearGradient(0, hz - 40, 0, hz + 30);
+    glow.addColorStop(0, "rgba(63,169,224,0)"); glow.addColorStop(0.6, "rgba(63,169,224,0.10)");
+    glow.addColorStop(1, "rgba(63,169,224,0)");
+    g.fillStyle = glow; g.fillRect(0, hz - 40, W, 70);
+    return c;
   }
 
   const horizon = () => H * (W < 700 ? 0.70 : 0.72);
@@ -64,11 +94,13 @@
     return {pts, L};
   }
 
-  function fillBelow(pts, color) {
+  // Fill from a swell's crest down to ``bottom`` (just past the lowest point the next nearer swell can reach,
+  // which covers the rest).
+  function fillBelow(pts, color, bottom = H + 2) {
     ctx.beginPath();
-    ctx.moveTo(pts[0][0], H + 2);
+    ctx.moveTo(pts[0][0], bottom);
     for (const [x, y] of pts) ctx.lineTo(x, y);
-    ctx.lineTo(pts[pts.length - 1][0], H + 2);
+    ctx.lineTo(pts[pts.length - 1][0], bottom);
     ctx.closePath();
     ctx.fillStyle = color;
     ctx.fill();
@@ -115,60 +147,55 @@
     ctx.fillStyle = g; ctx.fill();
   }
 
+  const depth = (i) => NEAR + (FAR - NEAR) * Math.pow(i / LINES, 1.25);   // line i: 0 = nearest
+  const reach = (d) => { const L = lineAt(d); return L.y + L.amp * MAX_SWELL + 2; };
+
   function draw(t) {
-    const hz = horizon(), mx = moonX(), my = hz * 0.42;
-    // sky
-    const sky = ctx.createLinearGradient(0, 0, 0, hz);
-    sky.addColorStop(0, rgb(SKY_TOP)); sky.addColorStop(1, rgb(SKY_LOW));
-    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, hz + 2);
-    for (const s of stars) {
-      const tw = still ? 1 : 0.75 + 0.25 * Math.sin(t * 0.8 + s.p);
-      ctx.fillStyle = `rgba(220,236,246,${s.a * tw * Math.min(1, (hz - s.y) / (hz * 0.5))})`;
-      ctx.fillRect(s.x, s.y, s.r, s.r);
-    }
-    // moon and its haze
-    const halo = ctx.createRadialGradient(mx, my, 0, mx, my, H * 0.45);
-    halo.addColorStop(0, "rgba(160,205,232,0.20)"); halo.addColorStop(1, "rgba(160,205,232,0)");
-    ctx.fillStyle = halo; ctx.fillRect(0, 0, W, hz + 2);
-    ctx.beginPath(); ctx.arc(mx, my, Math.max(12, Math.min(W, H) * 0.022), 0, 6.283);
-    ctx.fillStyle = "rgba(238,244,246,0.95)"; ctx.fill();
-    // horizon glow
-    const glow = ctx.createLinearGradient(0, hz - 40, 0, hz + 30);
-    glow.addColorStop(0, "rgba(63,169,224,0)"); glow.addColorStop(0.6, "rgba(63,169,224,0.10)");
-    glow.addColorStop(1, "rgba(63,169,224,0)");
-    ctx.fillStyle = glow; ctx.fillRect(0, hz - 40, W, 70);
+    const hz = horizon(), mx = moonX();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.drawImage(sky, 0, 0);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
     // the sea, far to near
     const fin = still ? null : finState(t);
     let finDone = !fin;
     const step = W < 700 ? 6 : 5;
+    const glints = [[], [], [], []];                    // segments by brightness, stroked in 4 batches per swell
     for (let i = LINES; i >= 0; i--) {
-      const k = i / LINES;                             // 1 = far, 0 = near
-      const d = NEAR + (FAR - NEAR) * Math.pow(k, 1.25);
+      const d = depth(i);
+      const bottom = i > 0 ? Math.min(H + 2, reach(depth(i - 1))) : H + 2;
       if (!finDone && d < FIN_D) {
         drawFin(fin);
         const sea = surface(FIN_D, t, step);           // water at the fin's own depth covers its base
-        fillBelow(sea.pts, rgb(mix(WATER_NEAR, WATER_FAR, Math.pow((FIN_D - NEAR) / (FAR - NEAR), 0.35))));
+        fillBelow(sea.pts, rgb(mix(WATER_NEAR, WATER_FAR, Math.pow((FIN_D - NEAR) / (FAR - NEAR), 0.35))),
+                  Math.min(H + 2, reach(d)));
         finDone = true;
       }
       const {pts, L} = surface(d, t, step);
       const depthMix = Math.pow((d - NEAR) / (FAR - NEAR), 0.35);
-      fillBelow(pts, rgb(mix(WATER_NEAR, WATER_FAR, depthMix)));
+      fillBelow(pts, rgb(mix(WATER_NEAR, WATER_FAR, depthMix)), bottom);
       const near = 1 - depthMix;
       stroke(pts, rgb(mix(LINE_FAR, LINE_NEAR, near * 0.7), 0.03 + 0.55 * Math.pow(near, 1.4)), 0.4 + 1.4 * near);
       // moonlight glints on this swell, shimmering in a column under the moon
       const col = 40 + 160 * L.s * 3;
+      for (const g of glints) g.length = 0;
       for (let j = 1; j < pts.length; j++) {
-        const [x, y] = pts[j];
+        const x = pts[j][0];
         const off = Math.abs(x - mx) / col;
         if (off > 1.6) continue;
         const flick = Math.sin(x * 0.11 + t * 2.6 + i * 1.7) * Math.sin(x * 0.037 - t * 1.1 + i);
         if (flick < 0.35) continue;
-        const a = (flick - 0.35) * (1 - off / 1.6) * (0.35 + 0.65 * near);
-        ctx.strokeStyle = `rgba(240,246,248,${Math.min(0.9, a * 1.4)})`;
-        ctx.lineWidth = 0.8 + 1.2 * near;
-        ctx.beginPath(); ctx.moveTo(pts[j - 1][0], pts[j - 1][1]); ctx.lineTo(x, y); ctx.stroke();
+        const a = Math.min(0.9, (flick - 0.35) * (1 - off / 1.6) * (0.35 + 0.65 * near) * 1.4);
+        glints[Math.min(3, Math.floor(a / 0.225))].push(j);
       }
+      ctx.lineWidth = 0.8 + 1.2 * near;
+      glints.forEach((seg, b) => {
+        if (!seg.length) return;
+        ctx.beginPath();
+        for (const j of seg) { ctx.moveTo(pts[j - 1][0], pts[j - 1][1]); ctx.lineTo(pts[j][0], pts[j][1]); }
+        ctx.strokeStyle = `rgba(240,246,248,${0.225 * b + 0.11})`;
+        ctx.stroke();
+      });
     }
     const haze = ctx.createLinearGradient(0, hz - 6, 0, hz + (H - hz) * 0.22);
     haze.addColorStop(0, rgb(SKY_LOW, 0.9)); haze.addColorStop(1, rgb(SKY_LOW, 0));
@@ -179,11 +206,19 @@
     ctx.fillStyle = fade; ctx.fillRect(0, H * 0.86, W, H * 0.14);
   }
 
+  let lastT = 14, lastFrame = 0;
   window.addEventListener("resize", resize);
   resize();
   if (still) return;
   const t0 = performance.now() - 6000;                // start with the fin already on its way in
-  const loop = (now) => { draw((now - t0) / 1000); requestAnimationFrame(loop); };
+  const loop = (now) => {
+    if (now - lastFrame >= FRAME_MS - 1) {             // 30 frames a second is plenty for a slow swell
+      lastFrame = now;
+      lastT = (now - t0) / 1000;
+      draw(lastT);
+    }
+    requestAnimationFrame(loop);
+  };
   requestAnimationFrame(loop);
 })();
 </script>

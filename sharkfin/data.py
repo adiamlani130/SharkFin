@@ -141,10 +141,103 @@ def history(symbol: str, period: str = "5y", interval: str = "1d") -> pd.DataFra
     return df[[c for c in ("Open", "High", "Low", "Close", "Volume") if c in df.columns]].dropna(subset=["Close"])
 
 
+# Big price panels (the S&P 500 and the like) are also kept on disk, so a restart doesn't download them again:
+# a copy saved in the last half hour is used as is, an older one (up to a week) only fetches the latest days.
+PANEL_DIR = Path(".sharkfin") / "cache" / "panels"
+PANEL_FRESH = 1800
+PANEL_PATCH_DAYS = 7
+PANEL_MIN_SYMBOLS = 20
+SAME_PRICE = 1e-4  # Yahoo's overlapping adjusted closes match exactly unless a split or dividend re-adjusted them
+
+
+def _panel_file(kind: str, symbols: tuple, period: str) -> Path:
+    import hashlib
+
+    h = hashlib.sha1(f"{kind}|{period}|{','.join(sorted(symbols))}".encode()).hexdigest()[:16]
+    return PANEL_DIR / f"{kind}_{period}_{h}.pkl"
+
+
+def _panel_load(path: Path):
+    try:
+        with open(path, "rb") as f:
+            saved_at, frames = pickle.load(f)
+        return (saved_at, frames) if isinstance(frames, dict) and frames else None
+    except Exception:
+        return None
+
+
+def _panel_save(path: Path, frames: dict) -> None:
+    import os
+
+    try:
+        PANEL_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{threading.get_ident()}.tmp")
+        with open(tmp, "wb") as f:
+            pickle.dump((time.time(), frames), f)
+        os.replace(tmp, path)
+    except Exception as e:  # pragma: no cover - read-only disk
+        log.warning("couldn't save the price panel: %s", e)
+
+
+def _patched(old: dict, recent: dict, period: str, key: str) -> tuple[dict | None, list]:
+    """``old`` with ``recent``'s rows added (newer values win), trimmed back to ``period``. Also returns the
+    tickers to download again in full: those whose overlapping prices changed (Yahoo re-adjusted their past for
+    a split or dividend) or that ``recent`` is missing. None when the two don't overlap at all."""
+    oc, rc = old[key], recent.get(key, pd.DataFrame())
+    common = oc.index.intersection(rc.index)
+    if rc.empty or not len(common):
+        return None, []
+    cols = oc.columns.intersection(rc.columns)
+    gap = (oc.loc[common, cols] / rc.loc[common, cols] - 1).abs().max()
+    redo = list(gap[gap > SAME_PRICE].index) + [c for c in oc.columns if c not in rc.columns]
+    start = rc.index.max() - pd.Timedelta(days=_PERIOD_DAYS.get(period, 7300))
+    out = {}
+    for f, df in old.items():
+        r = recent.get(f)
+        m = df if r is None or r.empty else pd.concat([df, r])
+        m = m[~m.index.duplicated(keep="last")].sort_index()
+        out[f] = m if period == "max" else m.loc[m.index >= start]
+    return out, redo
+
+
+def _cached_panel(kind: str, symbols: tuple, period: str, fetch, key: str) -> dict:
+    """``fetch(symbols, period)`` (a dict of dates x tickers frames) backed by the disk copy described above."""
+    if len(symbols) < PANEL_MIN_SYMBOLS or period not in _PERIOD_DAYS:
+        return fetch(symbols, period)
+    path = _panel_file(kind, symbols, period)
+    saved = _panel_load(path)
+    if saved:
+        age, frames = time.time() - saved[0], saved[1]
+        if age < PANEL_FRESH:
+            return frames
+        if age < PANEL_PATCH_DAYS * 86400 and key in frames:
+            recent = fetch(tuple(frames[key].columns), "1mo" if age > 3 * 86400 else "5d")
+            merged, redo = _patched(frames, recent, period, key) if recent else (None, [])
+            if merged is not None:
+                if redo:
+                    full = fetch(tuple(redo), period)
+                    for f, df in merged.items():
+                        if f in full:
+                            merged[f] = pd.concat([df.drop(columns=[c for c in full[f].columns if c in df]), full[f]],
+                                                  axis=1).sort_index()
+                _panel_save(path, merged)
+                return merged
+    frames = fetch(symbols, period)
+    if frames and not frames.get(key, pd.DataFrame()).empty:
+        _panel_save(path, frames)
+    return frames
+
+
 @ttl_cache(1800)
 def download_prices(symbols: tuple, period: str = "2y", field: str = "Close", chunk: int = 150) -> pd.DataFrame:
-    """Batched adjusted-close download: one request per ``chunk`` tickers
-    instead of one per ticker."""
+    """Batched adjusted-close download: one request per ``chunk`` tickers instead of one per ticker. Big panels
+    are kept on disk and only topped up with the latest days (see ``_cached_panel``)."""
+    frames = _cached_panel(f"prices-{field}", tuple(symbols), period,
+                           lambda syms, per: {field: _fetch_prices(syms, per, field, chunk)}, field)
+    return frames.get(field, pd.DataFrame())
+
+
+def _fetch_prices(symbols: tuple, period: str, field: str, chunk: int) -> pd.DataFrame:
     frames = []
     syms = list(dict.fromkeys(symbols))
 
@@ -182,7 +275,12 @@ def download_prices(symbols: tuple, period: str = "2y", field: str = "Close", ch
 
 @ttl_cache(1800)
 def download_ohlcv(symbols: tuple, period: str = "2y", chunk: int = 150) -> dict:
-    """Batched OHLCV download: {"Open"|"High"|"Low"|"Close"|"Volume": DataFrame (dates x tickers)}."""
+    """Batched OHLCV download: {"Open"|"High"|"Low"|"Close"|"Volume": DataFrame (dates x tickers)}. Big panels
+    are kept on disk and only topped up with the latest days (see ``_cached_panel``)."""
+    return _cached_panel("ohlcv", tuple(symbols), period, lambda syms, per: _fetch_ohlcv(syms, per, chunk), "Close")
+
+
+def _fetch_ohlcv(symbols: tuple, period: str, chunk: int) -> dict:
     fields = ("Open", "High", "Low", "Close", "Volume")
     parts: dict = {f: [] for f in fields}
     syms = list(dict.fromkeys(symbols))
@@ -831,6 +929,17 @@ def market_history(period: str = "10y") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 ALPACA_DATA = "https://data.alpaca.markets/v2"
+def yahoo_period(years: int) -> str:
+    """The Yahoo download period that covers ``years`` (Yahoo has no 20y: longer spans download "max")."""
+    return f"{years}y" if f"{years}y" in _PERIOD_DAYS else "max"
+
+
+def last_years(frames: dict, years: int) -> dict:
+    """A dict of date-indexed frames cut to the last ``years`` years."""
+    start = pd.Timestamp.now().normalize() - pd.DateOffset(years=years)
+    return {f: df.loc[df.index >= start] for f, df in frames.items()}
+
+
 _PERIOD_DAYS = {"5d": 7, "1mo": 31, "3mo": 92, "6mo": 183, "1y": 366, "2y": 731, "5y": 1827, "10y": 3653, "max": 7300}
 
 

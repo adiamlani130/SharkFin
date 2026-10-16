@@ -31,7 +31,7 @@ html, body {background: #040b13;}
 
 .st-key-sf-cta {gap: .7rem !important; margin-top: 2.1rem;}
 .st-key-sf-cta [data-testid="stPageLink"] a {padding: .7rem 1.15rem; border-radius: 8px; text-decoration: none;
-  border: 1px solid rgba(214,236,246,.24); background: rgba(5,16,27,.5); backdrop-filter: blur(6px);
+  border: 1px solid rgba(214,236,246,.24); background: rgba(5,16,27,.72);
   transition: background .2s ease, border-color .2s ease, transform .2s ease;}
 .st-key-sf-cta [data-testid="stPageLink"] a:hover {border-color: rgba(214,236,246,.5); background: rgba(10,30,48,.7);}
 .st-key-sf-cta [data-testid="stPageLink"] a:active {transform: translateY(1px);}
