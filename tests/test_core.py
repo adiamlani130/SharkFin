@@ -629,6 +629,126 @@ def test_day_night_legs_never_overlap_and_are_buy_only():
     assert t and 0 <= t["close_location"] <= 1 and len(t["band"]) == len(day_night.CHECKS)
 
 
+def _one_day_matrix(price, vwap, band=101.0):
+    """A session matrix of LOOKBACK flat days (each check 1% from the open) and a last day whose band is ``band`` at
+    every check, with the given closes and VWAP at the checks (each check fills at its own close)."""
+    from sharkfin import day_night
+    n, last = day_night.LOOKBACK + 1, day_night.LOOKBACK
+    days = pd.bdate_range("2026-01-05", periods=n)
+    c = np.full((n, day_night.BARS), 101.0)
+    c[last, :len(price)] = price
+    c[last, len(price):] = price[-1]
+    vw = np.full((n, day_night.BARS), 100.0)
+    vw[last, :len(vwap)] = vwap
+    vw[last, len(vwap):] = vwap[-1]
+    o = np.c_[np.full(n, 100.0), c[:, :-1]]
+    frame = lambda a: pd.DataFrame(a, index=days, columns=range(day_night.BARS))
+    M = {"c": frame(c), "o": frame(o), "vwap": frame(vw), "open": pd.Series(100.0, index=days),
+         "prev_close": pd.Series(100.0, index=days)}
+    M["open"].iloc[last] = M["prev_close"].iloc[last] = band / 1.01
+    return M
+
+
+def test_day_leg_buys_only_above_band_and_vwap_and_never_rebuys_at_the_sell_check():
+    from sharkfin import day_night
+    T = day_night.CHECK_TIMES
+    # 10:00 above both (buy); 10:30 above the band but under VWAP (sell, and no buy back at the same price);
+    # 11:00 still under VWAP (stay flat); 11:30 above both again (buy)
+    M = _one_day_matrix([102.0, 101.5, 101.6, 103.0], [101.0, 102.0, 102.0, 102.0])
+    tr = day_night.day_leg(M, cost_bps=0)[1]
+    assert list(zip(tr["Signal at"], tr["Sold at"])) == [(T[0], T[1]), (T[3], "16:00")]
+    # above the band from the first check but under VWAP all day: never buys
+    M = _one_day_matrix([102.0, 102.5, 103.0], [104.0, 104.0, 104.0])
+    assert day_night.day_leg(M)[1].empty
+    assert day_night.hold_after_check(True, 102.0, 101.0, np.nan) and not day_night.hold_after_check(False, 101.0, 101.0, 100.0)
+
+
+def test_day_night_today_replays_the_same_day_trades_as_the_backtest():
+    from sharkfin import day_night
+    from tests import fakes
+    bars = fakes.intraday_bars("TQQQ", 60)
+    M = day_night.session_matrix(bars)
+    tr = day_night.day_leg(M)[1]
+    day = pd.DatetimeIndex(bars.index.tz_localize(None)).normalize()
+    checked = 0
+    for d in M["c"].index[day_night.LOOKBACK + 1:]:
+        t = day_night.today(bars[day <= d], None, pd.Timestamp(d) + pd.Timedelta(hours=17))
+        ev = t["events"]
+        times = [e[0] for e in ev]
+        assert len(times) == len(set(times)), "a check both sold and bought"
+        want = [(x, "Buy") for x in tr.loc[tr["Date"] == d, "Signal at"]] + \
+               [(x, "Sell") for x in tr.loc[tr["Date"] == d, "Sold at"] if x != "16:00"]
+        assert sorted((e[0], e[1]) for e in ev) == sorted(want)
+        checked += bool(ev)
+    assert checked >= 3
+
+
+def test_intraday_cache_is_short_while_the_market_is_open():
+    from sharkfin import data
+    ny = lambda s: pd.Timestamp(s, tz="America/New_York")
+    assert data._intraday_ttl(ny("2026-10-14 11:05")) == 90       # Wednesday, session open
+    assert data._intraday_ttl(ny("2026-10-14 16:10")) == 90       # the delayed feed is still catching up
+    assert data._intraday_ttl(ny("2026-10-14 09:00")) == 1800
+    assert data._intraday_ttl(ny("2026-10-14 16:30")) == 1800
+    assert data._intraday_ttl(ny("2026-10-17 12:00")) == 1800     # Saturday
+    data._cache.clear()
+    life = {"s": 60}
+    calls = []
+
+    @data.ttl_cache(lambda: life["s"])
+    def f(x):
+        calls.append(x)
+        return [x]
+
+    f(1), f(1)
+    assert calls == [1] and f.cached(1)
+    life["s"] = 0
+    assert not f.cached(1)
+    f(1)
+    assert calls == [1, 1]
+    data._cache.clear()
+
+
+def test_alpaca_bars_retries_a_failed_span_and_never_returns_a_holed_history(monkeypatch):
+    import threading
+    from sharkfin import data
+    start, end = pd.Timestamp("2026-01-02", tz="UTC"), pd.Timestamp("2026-07-31", tz="UTC")  # 3 spans of <= 92 days
+    lock, tries = threading.Lock(), {}
+
+    def run(fail_times):
+        tries.clear()
+
+        def fake_get(path, params):
+            a = pd.Timestamp(params["start"])
+            with lock:
+                tries[a] = tries.get(a, 0) + 1
+                n = tries[a]
+            if a > start and n <= fail_times:  # the second span's first page fails
+                return {}
+            return {"symbol": "TQQQ", "next_page_token": None,
+                    "bars": [{"t": (a + pd.Timedelta(days=1, hours=15)).isoformat(), "o": 1, "h": 1, "l": 1, "c": 1,
+                              "v": 1, "vw": 1}]}
+        monkeypatch.setattr(data, "_alpaca_get", fake_get)
+        return data.alpaca_bars("TQQQ", "30Min", start, end)
+
+    assert len(run(0)) == 3
+    assert len(run(1)) == 3                      # one failure: the first page is tried again
+    assert run(2).empty                          # still failing: no history rather than one missing a quarter
+
+
+def test_live_breakout_readings_match_breakout_rider(monkeypatch):
+    from sharkfin import breakout_rider, data, live
+    from tests import fakes
+    fakes.install(monkeypatch)
+    data._cache.clear()
+    sw = live.switches()["breakout"]
+    assert sw["on"] == bool(breakout_rider.qqq_gate(fakes.history("QQQ")["Close"]).iloc[-1])
+    ohlc = live.tech_ohlcv()
+    want = breakout_rider.signal_frames(ohlc)["gain"].iloc[-1].dropna()
+    pd.testing.assert_series_equal(live.tech_gains(), want, check_names=False)
+    data._cache.clear()
+
+
 def test_breakout_rider_signals_need_a_new_high():
     from sharkfin import breakout_rider
     from tests import fakes
