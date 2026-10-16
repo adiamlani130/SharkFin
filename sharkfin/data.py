@@ -33,7 +33,11 @@ _cache: dict = {}
 _lock = threading.Lock()
 
 
-def ttl_cache(seconds: int):
+def ttl_cache(seconds):
+    """Cache a function's non-empty results for ``seconds``, or for ``seconds()`` when it's a callable (read on
+    every lookup, so the lifetime can depend on the time of day)."""
+    ttl = seconds if callable(seconds) else lambda: seconds
+
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
@@ -41,7 +45,7 @@ def ttl_cache(seconds: int):
             now = time.time()
             with _lock:
                 hit = _cache.get(key)
-            if hit and now - hit[0] < seconds:
+            if hit and now - hit[0] < ttl():
                 return _copy(hit[1])
             val = fn(*args, **kwargs)
             if not _is_empty(val):
@@ -53,7 +57,7 @@ def ttl_cache(seconds: int):
             """Whether a call with these arguments would be answered from the cache."""
             with _lock:
                 hit = _cache.get((fn.__qualname__, args, tuple(sorted(kwargs.items()))))
-            return bool(hit) and time.time() - hit[0] < seconds
+            return bool(hit) and time.time() - hit[0] < ttl()
 
         wrapper.cache_clear = lambda: _cache.clear()
         wrapper.cached = cached
@@ -990,7 +994,9 @@ def alpaca_bars(symbol: str, timeframe: str, start: datetime, end: datetime | No
                 adjustment: str = "all") -> pd.DataFrame:
     """Bars from Alpaca as a DataFrame (o, h, l, c, v, vw) indexed by New York time (bar start).
 
-    Intraday pages hold only about a month each, so long ranges are split into quarters fetched in parallel."""
+    Intraday pages hold only about a month each, so long ranges are split into quarters fetched in parallel. A page
+    that fails is tried once more; if it still fails, nothing is returned rather than a history with a hole in it
+    (callers already treat an empty frame as "no Alpaca data")."""
     utc = lambda d: pd.Timestamp(d).tz_convert("UTC") if pd.Timestamp(d).tzinfo else pd.Timestamp(d).tz_localize("UTC")
     t0, t1 = utc(start), utc(end) if end is not None else pd.Timestamp.now(tz="UTC")
     edges = [t0]
@@ -998,16 +1004,19 @@ def alpaca_bars(symbol: str, timeframe: str, start: datetime, end: datetime | No
         edges.append(edges[-1] + pd.Timedelta(days=92))
     edges.append(t1)
 
-    def chunk(a: pd.Timestamp, b: pd.Timestamp) -> list:
+    def chunk(a: pd.Timestamp, b: pd.Timestamp) -> list | None:
+        """The span's bars, or None if a page (the first one included) failed twice."""
         params = {"timeframe": timeframe, "start": a.strftime("%Y-%m-%dT%H:%M:%SZ"),
                   "end": b.strftime("%Y-%m-%dT%H:%M:%SZ"), "limit": 10000, "feed": feed, "adjustment": adjustment}
         rows, token = [], None
         for _ in range(500):
             if token:
                 params["page_token"] = token
-            j = _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params)
-            if not j and token:  # a failed page: try it once more rather than return a silently cut-off history
-                j = _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params)
+            # a good reply is never empty (it carries the symbol even with no bars), so {} means the call failed
+            j = _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params) or \
+                _alpaca_get(f"/stocks/{symbol.replace('-', '.')}/bars", params)
+            if not j:
+                return None
             rows += j.get("bars") or []
             token = j.get("next_page_token")
             if not token:
@@ -1016,10 +1025,16 @@ def alpaca_bars(symbol: str, timeframe: str, start: datetime, end: datetime | No
 
     spans = list(zip(edges[:-1], edges[1:]))
     if len(spans) == 1:
-        rows = chunk(*spans[0])
+        parts = [chunk(*spans[0])]
     else:
         with ThreadPoolExecutor(max_workers=6) as ex:
-            rows = [r for part in ex.map(lambda ab: chunk(*ab), spans) for r in part]
+            parts = list(ex.map(lambda ab: chunk(*ab), spans))
+    failed = [ab for ab, part in zip(spans, parts) if part is None]
+    if failed:
+        log.warning("Alpaca %s %s: %d of %d spans failed (first from %s); returning no bars rather than a history "
+                    "with holes", symbol, timeframe, len(failed), len(spans), failed[0][0].date())
+        return pd.DataFrame()
+    rows = [r for part in parts for r in part]
     if not rows:
         return pd.DataFrame()
     df = pd.DataFrame(rows)
@@ -1041,7 +1056,16 @@ def alpaca_daily(symbol: str, period: str = "5y") -> pd.DataFrame:
         ["Open", "High", "Low", "Close", "Volume"]]
 
 
-@ttl_cache(1800)
+def _intraday_ttl(now: pd.Timestamp | None = None) -> int:
+    """How long intraday bars stay cached: 90 s on weekdays from the 09:30 open until 16:20 (when the SIP feed's
+    16-minute delay has caught up with the close), so the live panel's bars are at most ~18 minutes old; 30
+    minutes otherwise. Each refresh is one request for the live panel's month of bars, and long backtest
+    histories sit behind the backtest's own cache."""
+    t = (now or pd.Timestamp.now(tz="America/New_York")).tz_convert("America/New_York")
+    return 90 if t.weekday() < 5 and 570 <= t.hour * 60 + t.minute < 980 else 1800
+
+
+@ttl_cache(_intraday_ttl)
 def intraday_bars(symbol: str, days: int = 60) -> pd.DataFrame:
     """30-minute regular-session bars (o, h, l, c, v, vw; New York time); ``.attrs["source"]`` says where they
     came from.

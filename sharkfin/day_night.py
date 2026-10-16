@@ -3,9 +3,10 @@
 Day leg, a noise-range breakout (flat by the close):
   * TQQQ's "normal" move by each half hour is the average of |price / that day's open - 1| at the same time of
     day over the last 14 sessions. The upper band is max(today's open, yesterday's close) x (1 + that move).
-  * Every 30 minutes from 10:00 to 15:30 New York time: if TQQQ is above the upper band, buy at the next
-    price. If long and TQQQ is back under the higher of the band and the session VWAP, sell. Anything still
-    held sells at the 16:00 close.
+  * Every 30 minutes from 10:00 to 15:30 New York time, the line is the higher of the upper band and the
+    session VWAP (the paper's trailing stop). If flat and TQQQ is above the line, buy at the next price; if
+    long and TQQQ is back under it, sell. Anything still held sells at the 16:00 close. Entry and exit use
+    the same line, so a check can never sell and buy back at the same price.
 Night leg, buy the weak close:
   * At 15:30, if TQQQ sits in the bottom 20% of the day's high-low range so far, buy at the close
     (market-on-close orders are due by 15:50, so the decision can only use what's known by 15:30) and sell at
@@ -17,7 +18,9 @@ trade), night leg 12.1% a year (57% won, +0.28% a trade), together 34.6% a year 
 +19% in 2022, against 22.5% a year and an 82% crash for holding TQQQ. The two legs barely move together
 (correlation 0.06 over 2016-26). Researched on TQQQ, not QQQ: on QQQ the same pair made 12% a year.
 The research's night leg decided on the 16:00 close itself, which can't be traded (orders are due by 15:50),
-so its night numbers are somewhat optimistic; this module decides at 15:30.
+so its night numbers are somewhat optimistic; this module decides at 15:30. The research's day leg also bought
+above the band alone, even under VWAP, so a check could sell and buy straight back (a 0.04% round trip for
+nothing); here a buy also needs TQQQ above VWAP, which skips those trades.
 
 This module replays the rules on 30-minute bars, which give the same check times, prices and VWAP as the
 research's 1-minute version (each check uses the bar's close and fills at the next bar's open).
@@ -40,8 +43,8 @@ CHECKS = list(range(0, 12))       # bar closes at 10:00 ... 15:30
 DECIDE = 11                       # the night leg decides on the bar closing at 15:30
 CHECK_TIMES = [f"{(600 + 30 * j) // 60}:{(600 + 30 * j) % 60:02d}" for j in CHECKS]  # each bar's closing time
 
-DAY_RULE = ("Every 30 minutes from 10:00 to 15:30: buy if TQQQ is above its upper noise band; if long, sell once "
-            "it drops back under the higher of the band and VWAP. Always flat by the close.")
+DAY_RULE = ("Every 30 minutes from 10:00 to 15:30: buy if TQQQ is above both its upper noise band and VWAP; if long, "
+            "sell once it drops back under the higher of the two. Always flat by the close.")
 NIGHT_RULE = ("At 15:30: if TQQQ sits in the bottom 20% of the day's range so far, buy at the close (market-on-close, "
               "due by 15:50) and sell at the next morning's open.")
 
@@ -86,6 +89,13 @@ def bands(M: dict, k: float = K, lookback: int = LOOKBACK) -> pd.DataFrame:
     return sigma.mul(base, axis=0).add(base, axis=0)
 
 
+def hold_after_check(long: bool, price: float, band: float, vwap: float) -> bool:
+    """Whether the day leg is long after a check: it buys above the higher of the band and VWAP and sells under it.
+    A missing VWAP falls back to the band."""
+    line = max(band, vwap) if np.isfinite(vwap) else band
+    return price >= line if long else price > line
+
+
 def day_leg(M: dict, k: float = K, lookback: int = LOOKBACK, cost_bps: float = COST_BPS) -> tuple[pd.Series, pd.DataFrame]:
     """Daily return of the day leg and its trade list."""
     ub = bands(M, k, lookback).to_numpy()
@@ -99,13 +109,13 @@ def day_leg(M: dict, k: float = K, lookback: int = LOOKBACK, cost_bps: float = C
             continue
         pos, e, t_in = False, 0.0, 0
         for j in CHECKS:
-            px = c[i, j]
-            if pos and px < max(ub[i, j], vw[i, j]):
+            hold = hold_after_check(pos, c[i, j], ub[i, j], vw[i, j])
+            if pos and not hold:
                 r = o[i, j + 1] / e - 1 - cost
                 daily[i] += r
                 trades.append((days[i], CHECK_TIMES[t_in], CHECK_TIMES[j], e, o[i, j + 1], r))
                 pos = False
-            if not pos and px > ub[i, j]:
+            elif hold and not pos:
                 pos, e, t_in = True, o[i, j + 1], j
         if pos:
             r = c[i, BARS - 1] / e - 1 - cost
@@ -252,13 +262,11 @@ def today(bars: pd.DataFrame, last_price: float | None = None, now: pd.Timestamp
     # replay today's checks so far
     pos, events = False, []
     for j in done_checks:
-        px, ub, vw = float(tb["c"].loc[j]), float(band.iloc[j]), float(vwap.loc[j])
-        if pos and px < max(ub, vw):
-            pos = False
-            events.append((CHECK_TIMES[j], "Sell", px))
-        if not pos and px > ub:
-            pos = True
-            events.append((CHECK_TIMES[j], "Buy", px))
+        px = float(tb["c"].loc[j])
+        hold = hold_after_check(pos, px, float(band.iloc[j]), float(vwap.loc[j]))
+        if hold != pos:
+            events.append((CHECK_TIMES[j], "Buy" if hold else "Sell", px))
+            pos = hold
     nxt = next((j for j in CHECKS if j not in done_checks), None)
     decided = DECIDE in done_checks
     if decided:  # the night leg's call was made on the 15:30 bar: range and price up to then only

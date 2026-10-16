@@ -455,9 +455,10 @@ def day_night_view():
             "open by then, over the last 14 sessions. The upper band is today's open (or yesterday's close, if higher) "
             "plus that normal move.",
             "<b>Day leg: buy the breakout.</b> Every 30 minutes from 10:00 to 15:30 New York time, buy if TQQQ is above "
-            "the band.",
+            "both the band and the day's VWAP.",
             "<b>Get out when it fades.</b> If long, sell at a check once TQQQ is back under the higher of the band and "
-            "the day's VWAP. Anything still held sells at the 16:00 close.",
+            "VWAP: the same line it bought above, so it never sells and buys straight back. Anything still held sells "
+            "at the 16:00 close.",
             "<b>Night leg: buy the weak close.</b> At 15:30, if TQQQ sits in the bottom 20% of the day's high-low range "
             "so far, buy at the close (market-on-close orders are due by 15:50) and sell at the next morning's open.",
             "<b>Size it.</b> Each leg uses the whole sleeve, but they never hold at the same time (one is 09:30-16:00, "
@@ -533,7 +534,7 @@ def dn_today(t: dict):
          "delta": (f"{t['price'] / t['next_band'] - 1:+.2%} away" if t.get("next_check") and np.isfinite(t["next_band"]) else None),
          "delta_color": "off", "delta_arrow": "off", "help": "Buy at the next check if TQQQ is above this band."},
         {"label": "Session VWAP", "value": ui.fmt_money(t["vwap"]),
-         "help": "Volume-weighted average price since the open. A long day trade sells under the higher of the band and VWAP."},
+         "help": "Volume-weighted average price since the open. The day leg buys above the higher of the band and VWAP, and sells under it."},
         {"label": "Day leg", "value": "Long" if t["in_trade"] else "Flat",
          "delta": t["events"][-1][1] + " at " + t["events"][-1][0] if t["events"] else "no trade yet today",
          "delta_color": "off", "delta_arrow": "off"},
@@ -736,8 +737,8 @@ def plan_view():
             "strongest first. For Plus 7 trades that fill, add the profit-target sell limit.",
             "<b>Exits:</b> sell at the open any position whose exit fired at the last close (RSI above 70 or a close under "
             "the 200-day for Plus 7; the 21 / 50 EMA cross for Breakout Rider).",
-            "<b>TQQQ, during the day:</b> check at 10:00, 10:30 … 15:30 against the band; sell when it fades under the "
-            "band and VWAP; flat by 16:00. By 15:50, send a market-on-close buy if the close is in the bottom 20% of "
+            "<b>TQQQ, during the day:</b> check at 10:00, 10:30 … 15:30: buy above both the band and VWAP, sell when it "
+            "fades under either; flat by 16:00. By 15:50, send a market-on-close buy if the close is in the bottom 20% of "
             "the range, and a market-on-open sell for the next morning.",
         ])
     with b:

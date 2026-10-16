@@ -43,7 +43,7 @@ def switches() -> dict:
     if len(m["qqq"]) > 60:
         q = m["qqq"].astype(float)
         f, s = q.ewm(span=breakout_rider.FAST, adjust=False).mean(), q.ewm(span=breakout_rider.SLOW, adjust=False).mean()
-        out["breakout"] = {"on": bool(f.iloc[-1] > s.iloc[-1]), "gap": float(f.iloc[-1] / s.iloc[-1] - 1)}
+        out["breakout"] = {"on": bool(breakout_rider.qqq_gate(q).iloc[-1]), "gap": float(f.iloc[-1] / s.iloc[-1] - 1)}
     return out
 
 
@@ -90,7 +90,8 @@ def tech_gains() -> pd.Series:
     ohlc = tech_ohlcv()
     if "Close" not in ohlc:
         return pd.Series(dtype=float)
-    return breakout_rider.signal_frames({f: ohlc[f].iloc[-200:] for f in ("Open", "High", "Low", "Close")})["gain"].iloc[-1].dropna()
+    c = ohlc["Close"].astype(float)
+    return (c / c.shift(breakout_rider.STRENGTH_DAYS) - 1).iloc[-1].dropna()
 
 
 def day_night_today() -> dict:
