@@ -7,14 +7,17 @@ Day leg, a noise-range breakout (flat by the close):
     price. If long and TQQQ is back under the higher of the band and the session VWAP, sell. Anything still
     held sells at the 16:00 close.
 Night leg, buy the weak close:
-  * If TQQQ closes in the bottom 20% of the day's high-low range, buy at the close and sell at the next
-    morning's open.
+  * At 15:30, if TQQQ sits in the bottom 20% of the day's high-low range so far, buy at the close
+    (market-on-close orders are due by 15:50, so the decision can only use what's known by 15:30) and sell at
+    the next morning's open. No trade across a half-day session.
 
 Each leg uses the whole sleeve. Costs: 0.02% per side. SharkFin's Oct 2026 research (1-minute Alpaca data,
 settings picked on 2016-21, graded Oct 2021 - Oct 2026): day leg 20.1% a year (46% of trades won, +0.18% a
 trade), night leg 12.1% a year (57% won, +0.28% a trade), together 34.6% a year with a 30% worst drop and
 +19% in 2022, against 22.5% a year and an 82% crash for holding TQQQ. The two legs barely move together
-(correlation 0.06). Researched on TQQQ, not QQQ: on QQQ the same pair made 12% a year.
+(correlation 0.06 over 2016-26). Researched on TQQQ, not QQQ: on QQQ the same pair made 12% a year.
+The research's night leg decided on the 16:00 close itself, which can't be traded (orders are due by 15:50),
+so its night numbers are somewhat optimistic; this module decides at 15:30.
 
 This module replays the rules on 30-minute bars, which give the same check times, prices and VWAP as the
 research's 1-minute version (each check uses the bar's close and fills at the next bar's open).
@@ -25,6 +28,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from . import walkforward
+
 SYMBOL = "TQQQ"
 K = 1.0
 LOOKBACK = 14
@@ -32,12 +37,13 @@ WEAK = 0.20
 COST_BPS = 2.0
 BARS = 13                         # 09:30, 10:00, ..., 15:30
 CHECKS = list(range(0, 12))       # bar closes at 10:00 ... 15:30
+DECIDE = 11                       # the night leg decides on the bar closing at 15:30
 CHECK_TIMES = [f"{(600 + 30 * j) // 60}:{(600 + 30 * j) % 60:02d}" for j in CHECKS]  # each bar's closing time
 
 DAY_RULE = ("Every 30 minutes from 10:00 to 15:30: buy if TQQQ is above its upper noise band; if long, sell once "
             "it drops back under the higher of the band and VWAP. Always flat by the close.")
-NIGHT_RULE = ("At the close: if TQQQ closed in the bottom 20% of the day's range, buy at the close and sell at the "
-              "next morning's open.")
+NIGHT_RULE = ("At 15:30: if TQQQ sits in the bottom 20% of the day's range so far, buy at the close (market-on-close, "
+              "due by 15:50) and sell at the next morning's open.")
 
 
 def session_matrix(bars: pd.DataFrame) -> dict:
@@ -52,6 +58,7 @@ def session_matrix(bars: pd.DataFrame) -> dict:
     day = pd.DatetimeIndex(df.index.tz_localize(None) if df.index.tz is not None else df.index).normalize()
     df = df.assign(_s=slot, _d=day)
     full = df.groupby("_d")["_s"].nunique()
+    every_close = df.sort_index().groupby("_d")["c"].last()     # every session, half days included
     df = df[df["_d"].isin(full[full == BARS].index)]
     if df.empty:
         return {}
@@ -61,7 +68,10 @@ def session_matrix(bars: pd.DataFrame) -> dict:
     out["close"] = out["c"][BARS - 1]
     out["high"] = out["h"].max(axis=1)
     out["low"] = out["l"].min(axis=1)
-    out["prev_close"] = out["close"].shift(1)
+    # the real previous session's close, even when that session was a half day dropped above
+    out["prev_close"] = every_close.shift(1).reindex(out["close"].index)
+    # the next session's date (half days included), to stop night trades that would span a dropped session
+    out["next_session"] = pd.Series(every_close.index, index=every_close.index).shift(-1).reindex(out["close"].index)
     pv = (out["vw"] * out["v"]).cumsum(axis=1)
     vv = out["v"].cumsum(axis=1)
     out["vwap"] = (pv / vv.replace(0, np.nan)).ffill(axis=1).fillna(out["c"])
@@ -110,30 +120,37 @@ def close_location(high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Seri
     return (close - low) / (high - low).replace(0, np.nan)
 
 
-def night_leg(daily: pd.DataFrame, weak: float = WEAK, cost_bps: float = COST_BPS) -> tuple[pd.Series, pd.DataFrame]:
-    """Night leg from daily bars (Open, High, Low, Close of the regular session). The return of a night held
-    after day t is booked on day t+1."""
-    d = daily.astype(float)
-    loc = close_location(d["High"], d["Low"], d["Close"])
-    on = d["Open"].shift(-1) / d["Close"] - 1 - 2 * cost_bps * 1e-4
-    cond = (loc < weak).fillna(False)
+def decision_location(M: dict) -> pd.Series:
+    """Where TQQQ sat in the day's range at 15:30, using only the bars up to then (0 = at the low)."""
+    upto = list(range(DECIDE + 1))
+    return close_location(M["h"][upto].max(axis=1), M["l"][upto].min(axis=1), M["c"][DECIDE])
+
+
+def night_leg(M: dict, weak: float = WEAK, cost_bps: float = COST_BPS) -> tuple[pd.Series, pd.DataFrame]:
+    """Night leg from the session matrix: decided at 15:30, bought at the 16:00 close, sold at the next session's
+    open. The return of a night held after day t is booked on day t+1. A night is skipped when the next session
+    isn't in the matrix (a half day or a missing day), rather than holding across it."""
+    loc = decision_location(M)
+    close, days = M["close"], M["close"].index
+    nxt_open = M["open"].shift(-1)
+    adjacent = pd.Series(days, index=days).shift(-1).eq(M["next_session"])  # the next row is the next session
+    cond = (loc < weak).fillna(False) & adjacent & nxt_open.notna()
+    on = nxt_open / close - 1 - 2 * cost_bps * 1e-4
     r = on.where(cond, 0.0).shift(1).fillna(0.0)
-    m = cond.shift(1, fill_value=False)
-    tr = pd.DataFrame({"Bought (close)": d.index[cond.to_numpy()][: int(m.sum())], "Sold (open)": r.index[m.to_numpy()],
-                       "Close location": loc[cond].iloc[: int(m.sum())].to_numpy(), "Return": r[m].to_numpy()})
+    held = cond.shift(1, fill_value=False).astype(bool)
+    tr = pd.DataFrame({"Bought (close)": days[cond.to_numpy()], "Sold (open)": days[held.to_numpy()],
+                       "15:30 location": loc[cond].to_numpy(), "Return": r[held].to_numpy()})
     return r, tr
 
 
-def backtest(bars: pd.DataFrame, daily: pd.DataFrame | None = None, tbill_yields: pd.Series | None = None,
-             cost_bps: float = COST_BPS) -> dict:
-    """Both legs. ``bars`` are 30-minute bars (day leg and, when ``daily`` is missing, the night leg's ranges).
-    ``daily`` (Open/High/Low/Close) lets the night leg run on a longer history than the intraday bars."""
+def backtest(bars: pd.DataFrame, tbill_yields: pd.Series | None = None, cost_bps: float = COST_BPS,
+             k: float = K, weak: float = WEAK) -> dict:
+    """Both legs on 30-minute bars, with band width ``k`` and weak-close level ``weak``."""
     M = session_matrix(bars)
     if not M:
         raise ValueError("No complete intraday sessions to test on.")
-    d_r, d_tr = day_leg(M, cost_bps=cost_bps)
-    sess = pd.DataFrame({"Open": M["open"], "High": M["high"], "Low": M["low"], "Close": M["close"]})
-    n_r, n_tr = night_leg(sess, cost_bps=cost_bps)
+    d_r, d_tr = day_leg(M, k=k, cost_bps=cost_bps)
+    n_r, n_tr = night_leg(M, weak=weak, cost_bps=cost_bps)
     both = d_r + n_r
     out = {"day": d_r, "night": n_r, "both": both, "day_trades": d_tr, "night_trades": n_tr, "sessions": len(both)}
     bh = (M["close"] / M["prev_close"] - 1).fillna(0.0)
@@ -145,11 +162,40 @@ def backtest(bars: pd.DataFrame, daily: pd.DataFrame | None = None, tbill_yields
         rf = pd.Series(daily_cash(pd.DatetimeIndex(both.index), tbill_yields), index=both.index)
     out["stats"] = {k: leg_stats(v, t, rf) for k, v, t in (("Day", d_r, d_tr), ("Night", n_r, n_tr), ("Day + night", both, None),
                                                           ("Hold TQQQ", bh, None))}
-    if daily is not None and len(daily) > len(sess) + 60:
-        ln, ltr = night_leg(daily, cost_bps=cost_bps)
-        out["night_long"], out["night_long_trades"] = ln, ltr
-        out["stats"]["Night (daily history)"] = leg_stats(ln, ltr, None)
     return out
+
+
+K_GRID = (0.8, 1.0, 1.2)
+WEAK_GRID = (0.15, 0.20, 0.25)
+
+
+def walk_forward(bars: pd.DataFrame, tbill_yields: pd.Series | None = None, cost_bps: float = COST_BPS,
+                 progress=None) -> dict:
+    """Day + Night graded out of sample: each year's band width and weak-close level are picked on the three
+    years before it (see ``walkforward``), then traded on that year only. Needs about four years of
+    30-minute bars."""
+    M = session_matrix(bars)
+    if not M:
+        raise ValueError("No complete intraday sessions to test on.")
+    days = M["close"].index
+    points = walkforward.grid(**{"Band width": K_GRID, "Weak close below": WEAK_GRID})
+
+    def evaluate(d, p, start):
+        res = backtest(d, None, cost_bps, k=p["Band width"], weak=p["Weak close below"])
+        return {"returns": res["both"].loc[start:]}
+
+    rf = None
+    if tbill_yields is not None and len(tbill_yields.dropna()):
+        from .swing_engine import daily_cash
+
+        rf = pd.Series(daily_cash(pd.DatetimeIndex(days), tbill_yields), index=days)
+    wf = walkforward.run(evaluate, bars, points, walkforward.folds(days, purge=1, first=LOOKBACK + 1), rf, progress)
+    r = wf["returns"]
+    hold = (M["close"] / M["prev_close"] - 1).reindex(r.index).fillna(0.0)
+    hold.iloc[0] = 0.0
+    wf["hold_equity"] = (1 + hold).cumprod()
+    wf["stats"] = {"Day + night": leg_stats(r, None, rf), "Hold TQQQ": leg_stats(hold, None, rf)}
+    return wf
 
 
 def leg_stats(r: pd.Series, trades: pd.DataFrame | None = None, rf: pd.Series | None = None) -> dict:
@@ -188,7 +234,12 @@ def today(bars: pd.DataFrame, last_price: float | None = None, now: pd.Timestamp
     tb = b[day == last_day]
     slot = ((tb.index.hour * 60 + tb.index.minute - 570) // 30).astype(int)
     tb = tb.assign(_s=slot).groupby("_s").last()
-    complete_session = len(tb) == BARS and (now is None or now.hour >= 16)
+    after_close = now is None or now.tz_localize(None).normalize() > last_day or now.hour >= 16
+    complete_session = len(tb) == BARS and after_close
+    in_session = now is not None and not after_close and now.tz_localize(None).normalize() == last_day \
+        and (now.hour, now.minute) >= (9, 30)
+    if not in_session:
+        last_price = None  # outside 09:30-16:00 the latest trade is an extended-hours print, not this session
     prev_close = float(hist["close"].iloc[-1])
     o0 = float(tb["o"].iloc[0])
     move = (hist["c"][CHECKS].div(hist["open"], axis=0) - 1).abs().iloc[-LOOKBACK:].mean() * K
@@ -209,12 +260,17 @@ def today(bars: pd.DataFrame, last_price: float | None = None, now: pd.Timestamp
             pos = True
             events.append((CHECK_TIMES[j], "Buy", px))
     nxt = next((j for j in CHECKS if j not in done_checks), None)
-    hi, lo = max(float(tb["h"].max()), price), min(float(tb["l"].min()), price)
-    loc = (price - lo) / (hi - lo) if hi > lo else np.nan
+    decided = DECIDE in done_checks
+    if decided:  # the night leg's call was made on the 15:30 bar: range and price up to then only
+        upto = tb.loc[tb.index <= DECIDE]
+        hi, lo, at = float(upto["h"].max()), float(upto["l"].min()), float(tb["c"].loc[DECIDE])
+    else:
+        hi, lo, at = max(float(tb["h"].max()), price), min(float(tb["l"].min()), price), price
+    loc = (at - lo) / (hi - lo) if hi > lo else np.nan
     cur_vwap = float(vwap.iloc[-1]) if len(vwap) else np.nan
     next_band = float(band.iloc[nxt]) if nxt is not None else np.nan
     return {"date": last_day, "prev_close": prev_close, "open": o0, "price": price, "vwap": cur_vwap,
             "band": band.rename(lambda j: CHECK_TIMES[j]), "next_check": CHECK_TIMES[nxt] if nxt is not None else None,
             "next_band": next_band, "in_trade": pos, "events": events, "high": hi, "low": lo, "close_location": loc,
             "weak_close": bool(np.isfinite(loc) and loc < WEAK), "night_trigger": lo + WEAK * (hi - lo),
-            "complete": complete_session, "bars": tb}
+            "night_decided": decided, "complete": complete_session, "bars": tb}

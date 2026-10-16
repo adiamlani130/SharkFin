@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
-from . import swing_engine
+from . import swing_engine, walkforward
 
 BREAKOUT_DAYS = 20
 ADX_MIN = 20.0
@@ -67,20 +67,25 @@ def qqq_gate(qqq_close: pd.Series | None) -> pd.Series:
     return (q.ewm(span=FAST, adjust=False).mean() > q.ewm(span=SLOW, adjust=False).mean())
 
 
-def signal_frames(ohlc: dict) -> dict:
+def signal_frames(ohlc: dict, breakout_days: int = BREAKOUT_DAYS, adx_min: float = ADX_MIN,
+                  members: pd.DataFrame | None = None) -> dict:
     """Signals for an OHLC panel of tech stocks (dates x tickers). The strength rank is against the columns, so
-    pass the whole tech universe."""
+    pass the whole tech universe. With ``members`` (point-in-time index membership) a stock is only ranked
+    against, and can only be bought while it is, a member that day."""
     c = ohlc["Close"].astype(float)
     h = ohlc["High"].astype(float)
-    prior_high = h.rolling(BREAKOUT_DAYS, min_periods=BREAKOUT_DAYS).max().shift(1)
+    prior_high = h.rolling(breakout_days, min_periods=breakout_days).max().shift(1)
     adx = swing_engine.panel_adx(ohlc, 14)
     atr = swing_engine.panel_atr(ohlc, 14)
     gain = c / c.shift(STRENGTH_DAYS) - 1
-    rank = gain.rank(axis=1, pct=True)
+    mem = members.reindex(index=c.index, columns=c.columns).fillna(False).astype(bool) if members is not None else None
+    rank = (gain.where(mem) if mem is not None else gain).rank(axis=1, pct=True)
     up = c > c.shift(1)
     ema_f = c.ewm(span=FAST, adjust=False, min_periods=FAST).mean()
     ema_s = c.ewm(span=SLOW, adjust=False, min_periods=SLOW).mean()
-    buy = (c > prior_high) & up & (adx > ADX_MIN) & (rank >= STRENGTH_MIN)
+    buy = (c > prior_high) & up & (adx > adx_min) & (rank >= STRENGTH_MIN)
+    if mem is not None:
+        buy &= mem
     return {"buy": buy.fillna(False), "prior_high": prior_high, "adx": adx, "atr": atr, "gain": gain, "rank": rank,
             "score": c / c.shift(SCORE_DAYS) - 1, "limit": c - LIMIT_ATR * atr, "ema_fast": ema_f, "ema_slow": ema_s,
             "exit": (ema_f < ema_s).fillna(False)}
@@ -171,14 +176,17 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
 
 
 def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None = None, slots: int = SLOTS,
-             cost_bps: float = COST_BPS, start=None, market_close: pd.Series | None = None) -> dict:
-    """Replay Tech Breakout Rider on a panel of tech stocks {"Open"|"High"|"Low"|"Close": dates x tickers}."""
-    C = ohlcv["Close"].astype(float).sort_index()
-    C = C.loc[:, C.notna().sum() > STRENGTH_DAYS + 20]
+             cost_bps: float = COST_BPS, start=None, market_close: pd.Series | None = None,
+             breakout_days: int = BREAKOUT_DAYS, adx_min: float = ADX_MIN, members: pd.DataFrame | None = None,
+             liquidate: bool = False) -> dict:
+    """Replay Tech Breakout Rider on a panel of tech stocks {"Open"|"High"|"Low"|"Close": dates x tickers}.
+    One fixed set of settings over the whole span is an in-sample test: use ``walk_forward`` for
+    out-of-sample results."""
+    C = ohlcv["Close"].astype(float).sort_index().dropna(axis=1, how="all")
     dates = C.index
     panel = {f: ohlcv[f].reindex(index=dates, columns=C.columns).astype(float) for f in ("Open", "High", "Low")}
     panel["Close"] = C
-    q = qqq_close.astype(float).reindex(dates.union(qqq_close.index)).ffill().reindex(dates)
+    q = walkforward.carry_forward(qqq_close.astype(float).reindex(dates.union(qqq_close.index))).reindex(dates)
     gate = qqq_gate(q).fillna(False).to_numpy(bool)
     rf = swing_engine.daily_cash(dates, tbill_yields)
     t0 = STRENGTH_DAYS + 20
@@ -186,20 +194,58 @@ def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None =
         t0 = max(t0, int(dates.searchsorted(pd.Timestamp(start))))
     if len(dates) - t0 < 30:
         raise ValueError("Not enough price history for a Breakout Rider backtest (needs about a year).")
-    sig = signal_frames(panel)
+    sig = signal_frames(panel, breakout_days, adx_min, members)
     run = swing_engine.run(panel, sig["buy"], sig["score"], gate, rf, exit_signal=sig["exit"], limit=sig["limit"],
-                           max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="21 EMA under 50 EMA")
+                           max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="21 EMA under 50 EMA",
+                           liquidate=liquidate)
     equity, tr = run["equity"], run["trades"]
     rf_s = pd.Series(rf[t0:], index=dates[t0:])
     qr = q.pct_change(fill_method=None).fillna(0.0).iloc[t0:]
     qr.iloc[0] = 0.0
-    out = {"equity": equity, "exposure": run["exposure"], "trades": tr, "qqq_equity": (1 + qr).cumprod(),
+    out = {"equity": equity, "returns": equity.pct_change().fillna(0.0), "exposure": run["exposure"], "trades": tr,
+           "qqq_equity": (1 + qr).cumprod(),
            "stats": swing_engine.stats(equity, rf_s, tr), "qqq_stats": swing_engine.stats((1 + qr).cumprod(), rf_s),
            "symbols": C.shape[1]}
     if market_close is not None and len(market_close):
-        m = market_close.astype(float).reindex(dates.union(market_close.index)).ffill().reindex(dates)
+        m = walkforward.carry_forward(market_close.astype(float).reindex(dates.union(market_close.index))).reindex(dates)
         mr = m.pct_change(fill_method=None).fillna(0.0).iloc[t0:]
         mr.iloc[0] = 0.0
         out["spy_equity"] = (1 + mr).cumprod()
         out["spy_stats"] = swing_engine.stats(out["spy_equity"], rf_s)
     return out
+
+
+BREAKOUT_GRID = (20, 40)
+ADX_GRID = (15.0, 20.0, 25.0)
+
+
+def walk_forward(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None = None, slots: int = SLOTS,
+                 cost_bps: float = COST_BPS, market_close: pd.Series | None = None,
+                 members: pd.DataFrame | None = None, progress=None) -> dict:
+    """Breakout Rider graded out of sample: each year's breakout length and ADX floor are picked on the three
+    years before it (see ``walkforward``), then traded on that year only. The purge gap is the 90-day
+    holding limit."""
+    points = walkforward.grid(**{"Breakout days": BREAKOUT_GRID, "ADX above": ADX_GRID})
+    data = {"ohlcv": ohlcv, "qqq": qqq_close, "tbill": tbill_yields, "members": members}
+
+    def evaluate(d, p, start):
+        res = backtest(d["ohlcv"], d["qqq"], d["tbill"], slots, cost_bps, start=start,
+                       breakout_days=int(p["Breakout days"]), adx_min=p["ADX above"], members=d["members"],
+                       liquidate=True)
+        return {"returns": res["returns"], "trades": res["trades"]}
+
+    dates = ohlcv["Close"].sort_index().index
+    rf = pd.Series(swing_engine.daily_cash(dates, tbill_yields), index=dates)
+    wf = walkforward.run(evaluate, data, points,
+                         walkforward.folds(dates, purge=MAX_DAYS, first=STRENGTH_DAYS + 20), rf, progress)
+    r = wf["returns"]
+    rf_s = rf.reindex(r.index).fillna(0.0)
+    for name, px in (("qqq", qqq_close), ("spy", market_close)):
+        if px is None or not len(px):
+            continue
+        br = px.astype(float).pct_change(fill_method=None).reindex(r.index).fillna(0.0)
+        br.iloc[0] = 0.0
+        wf[f"{name}_equity"] = (1 + br).cumprod()
+        wf[f"{name}_stats"] = swing_engine.stats(wf[f"{name}_equity"], rf_s)
+    wf["stats"] = swing_engine.stats(wf["equity"], rf_s, wf["trades"] if len(wf["trades"]) else None)
+    return wf

@@ -103,6 +103,13 @@ def install(monkeypatch):
     monkeypatch.setattr(data, "intraday_bars", intraday_bars)
     monkeypatch.setattr(data, "latest_trade", lambda symbol: {})
     monkeypatch.setattr(data, "alpaca_keys", lambda: None)
+    monkeypatch.setattr(data, "sp500_spells", sp500_spells)
+
+
+def sp500_spells():
+    """Every test symbol has been a member since 1996, except the last one, which joined in 2023."""
+    rows = [(s, pd.Timestamp("1996-01-02"), pd.NaT) for s in SYMS[:-1]] + [(SYMS[-1], pd.Timestamp("2023-06-01"), pd.NaT)]
+    return pd.DataFrame(rows, columns=["ticker", "start", "end"])
 
 
 def intraday_bars(symbol, days=60):

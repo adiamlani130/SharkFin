@@ -106,10 +106,13 @@ def scan(symbols: tuple, with_fund: bool, weights: tuple):
 
 
 @st.cache_data(ttl=6 * 3600, show_spinner=False)
-def factor_backtest(symbols: tuple, weights: tuple, with_earnings: bool):
-    long = data.download_prices(symbols, period="5y")
-    earn = data.earnings_histories(symbols) if with_earnings else None
-    return factors.backtest_price_composite(long, theme_weights=dict(weights), earnings=earn or None)
+def factor_backtest(symbols: tuple, weights: tuple, with_earnings: bool, point_in_time: bool):
+    if point_in_time:  # everyone who was in the S&P 500 over the decade, traded only while a member
+        symbols = tuple(dict.fromkeys(symbols + tuple(data.sp500_ever(pd.Timestamp.now() - pd.DateOffset(years=10)))))
+    long = data.download_prices(symbols, period="10y")
+    members = data.sp500_members(long.index, long.columns) if point_in_time else None
+    earn = data.earnings_histories(tuple(long.columns)) if with_earnings else None
+    return factors.walk_forward(long, theme_weights=dict(weights), earnings=earn or None, members=members)
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -582,7 +585,7 @@ with tabs[5]:
             "Right direction": st.column_config.NumberColumn(format="percent",
                                                              help="Share of months where higher scores went on to do better.")})
 
-        st.subheader("Replay: the last ~4 years with your weights")
+        st.subheader("Replay: walk-forward over the last 10 years")
         with_earn = bool(use_fund and tw.get("Earnings", 0) > 0)
         replayed = [t for t in factors.REPLAYABLE if tw.get(t, 0) > 0 and (with_earn or t in factors.PRICE_FACTORS)]
         st.caption("Every month, buy the top 20% of this list using only what was known then, hold a month, pay trading "
@@ -590,7 +593,7 @@ with tabs[5]:
                    "Quality, Growth and Analysts are left out because free data doesn't keep their past values.")
         with st.spinner("Replaying the ranking month by month…"):
             try:
-                bt = factor_backtest(tuple(px.columns), tuple(sorted(tw.items())), with_earn)
+                bt = factor_backtest(tuple(px.columns), tuple(sorted(tw.items())), with_earn, uni_name == "S&P 500")
             except ValueError as e:
                 st.warning(str(e))
                 bt = None
@@ -604,8 +607,8 @@ with tabs[5]:
             st.markdown(f"<div class='sf-card'>{ui.pill('Ahead' if edge > 0.01 else 'Even' if edge > -0.01 else 'Behind', 'pos' if edge > 0.01 else 'neu' if edge > -0.01 else 'neg')}"
                         f"<span class='sf-note'>{verdict}: <b>{s_stats['CAGR']:.1%}</b> a year vs <b>{b_stats['CAGR']:.1%}</b> "
                         f"for an equal-weight basket of the same stocks. The top 20% beat the basket in "
-                        f"<b>{bt['beat_rate']:.0%}</b> of months. Four years is short: the 24-year test above is the better "
-                        "guide to what to expect.</span></div>", unsafe_allow_html=True)
+                        f"<b>{bt['beat_rate']:.0%}</b> of months. A few years is short: the 24-year test above is the "
+                        "better guide to what to expect.</span></div>", unsafe_allow_html=True)
             eq = pd.DataFrame({"Top 20% each month": (1 + bt["strategy"]).cumprod() * 10_000,
                                "Average stock in the list": (1 + bt["benchmark"]).cumprod() * 10_000})
             fig = go.Figure([go.Scatter(x=eq.index, y=eq[c], name=c, line=dict(width=2 if i == 0 else 1.5,
@@ -630,7 +633,9 @@ with tabs[5]:
                 {"label": "Portfolio turnover", "value": ui.fmt_pct(bt["avg_turnover"], 0),
                  "help": "Share of the portfolio replaced each month. Higher turnover means more trading costs (10 bps charged)."},
             ], key="btm")
-            st.caption("Caveat: the replay uses today's index members, so companies that were dropped (often the big losers) "
-                       "are missing, which flatters both lines. Past results don't guarantee future ones.")
+            ui.walk_forward_table(bt, "btm_wf",
+                                  "S&P 500: only that month's members are ranked and bought; Yahoo lacks prices for "
+                                  "some that left, so a little survivorship bias remains. Other lists use today's "
+                                  "members, which flatters both lines. Past results don't guarantee future ones.")
 
 ui.disclaimer()

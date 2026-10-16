@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import html as _html
 import json
@@ -16,22 +17,22 @@ import streamlit as st
 
 from . import data
 
-GREEN, RED, BLUE, ORANGE, MUTED = "#2dd4a3", "#ff5c7a", "#4ea8ff", "#f5a524", "#8b95a7"
+GREEN, RED, BLUE, ORANGE, MUTED = "#2dd4a3", "#ff5c7a", "#4ea8ff", "#f5a524", "#8599ab"
 PURPLE = "#a78bfa"
-BG, PANEL, GRID, BORDER = "#0a0e14", "#121822", "#1c2431", "#1f2836"
-DIVERGING = [[0, "#9b2c45"], [0.5, "#1a212c"], [1, "#167a5f"]]
+BG, PANEL, GRID, BORDER = "#06101a", "#0b1824", "#132536", "#172a3b"
+DIVERGING = [[0, "#9b2c45"], [0.5, "#122333"], [1, "#167a5f"]]
 MA_COLORS = {"SMA 20": PURPLE, "EMA 20": PURPLE, "EMA 21": "#f472b6", "SMA 50": BLUE, "SMA 200": ORANGE}
 DATA_DIR = Path(".sharkfin")
 
 pio.templates["sharkfin"] = go.layout.Template(
     layout=dict(
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(color="#c9d1dc", family="Inter, system-ui, sans-serif", size=12),
+        font=dict(color="#b4c4d1", family="IBM Plex Sans, system-ui, sans-serif", size=12),
         xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, linecolor=BORDER, showline=False),
         yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, linecolor=BORDER, showline=False),
         colorway=[BLUE, GREEN, ORANGE, PURPLE, RED, "#f472b6", "#5eead4", "#facc15"],
-        margin=dict(l=10, r=10, t=56, b=10), hoverlabel=dict(bgcolor="#1a212c", bordercolor=BORDER, font=dict(color="#e6e9ef")),
-        title=dict(x=0, xanchor="left", y=0.98, yanchor="top", font=dict(size=14, color="#e6e9ef")),
+        margin=dict(l=10, r=10, t=56, b=10), hoverlabel=dict(bgcolor="#0d1b28", bordercolor="#21394f", font=dict(color="#e4edf3", family="IBM Plex Sans, sans-serif")),
+        title=dict(x=0, xanchor="left", y=0.98, yanchor="top", font=dict(size=14, color="#e4edf3")),
         legend=dict(bgcolor="rgba(0,0,0,0)", orientation="h", y=-0.1, x=0, yanchor="top", font=dict(size=11)),
     )
 )
@@ -39,26 +40,48 @@ pio.templates.default = "plotly_dark+sharkfin"
 
 CSS = """
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap');
+/* SharkFin night-sea palette: abyss #06101a, trench #0b1824, swell #172a3b, foam #e4edf3, mist #8599ab,
+   fin blue #3fa9e0 (interface), green / red (money only) */
+
 /* ---------- layout ---------- */
-.block-container {padding-top: 2.2rem; padding-bottom: 3rem; max-width: 1360px;}
+.block-container {padding-top: 2.6rem; padding-bottom: 3.5rem; max-width: 1320px;}
 @media (max-width: 900px) {.block-container {padding-left: 1rem; padding-right: 1rem; padding-top: 1.4rem;}}
-h1 {letter-spacing: -0.025em;}
-h2, h3, h4 {letter-spacing: -0.01em;}
-hr {margin: 1.2rem 0 !important; border-color: #1f2836 !important;}
+[data-testid="stMainBlockContainer"] {animation: sf-in .45s ease-out both;}
+@keyframes sf-in {from {opacity: 0;} to {opacity: 1;}}
+@media (prefers-reduced-motion: reduce) {[data-testid="stMainBlockContainer"] {animation: none;}}
+h2, h3, h4 {letter-spacing: -0.008em;}
+[data-testid="stHeading"] h2, [data-testid="stHeading"] h3 {padding-top: 1.1rem;}
+hr {margin: 1.4rem 0 !important; border-color: #172a3b !important;}
+::selection {background: rgba(63,169,224,.35);}
+* {scrollbar-width: thin; scrollbar-color: #1d3347 transparent;}
 
 /* ---------- page header ---------- */
-.sf-head {margin: 0 0 1.1rem 0;}
-.sf-head h1 {font-size: 1.9rem; margin: 0; padding: 0; line-height: 1.2;}
-.sf-head p {color: #8b95a7; margin: .35rem 0 0 0; font-size: .92rem; max-width: 820px; line-height: 1.5;}
-@media (max-width: 640px) {.sf-head h1 {font-size: 1.55rem;}}
+.sf-head {margin: 0 0 1.5rem 0; padding-bottom: 1.1rem; border-bottom: 1px solid #12212f;}
+.sf-head h1 {font-family: 'Newsreader', Georgia, serif !important; font-weight: 400 !important; font-size: 2.45rem !important;
+  letter-spacing: -0.018em; margin: 0; padding: 0 !important; line-height: 1.1; color: #eef4f7;}
+.sf-head p {color: #8599ab; margin: .5rem 0 0 0; font-size: .93rem; max-width: 760px; line-height: 1.55;}
+@media (max-width: 640px) {.sf-head h1 {font-size: 1.9rem !important;}}
+
+/* ---------- sidebar ---------- */
+[data-testid="stSidebarNavLink"] {border-radius: 6px; transition: background .15s ease;}
+[data-testid="stSidebarNavLink"] p {font-size: .9rem; color: #a9bccb;}
+[data-testid="stSidebarNavLink"]:hover p {color: #e4edf3;}
+[data-testid="stSidebarNavLink"][aria-current="page"] {background: rgba(63,169,224,.12);
+  box-shadow: inset 2px 0 0 #3fa9e0;}
+[data-testid="stSidebarNavLink"][aria-current="page"] p {color: #e4edf3; font-weight: 500;}
+[data-testid="stNavSectionHeader"] p {font-size: .76rem; color: #5f7a90; font-weight: 500;}
+[data-testid="stSidebarNavSeparator"] {border-color: #12212f;}
 
 /* ---------- metrics ---------- */
-[data-testid="stMetric"] {background: #111722; border: 1px solid #1f2836; border-radius: 10px; padding: 12px 14px;
-  height: 100%;}
-[data-testid="stMetricLabel"] p {color: #8b95a7 !important; font-size: .72rem !important; text-transform: uppercase;
-  letter-spacing: .06em; font-weight: 600;}
-[data-testid="stMetricValue"] {white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
-[data-testid="stMetricDelta"] {font-size: .8rem;}
+[data-testid="stMetric"] {background: #0b1824; border: 1px solid #152738; border-radius: 10px; padding: 13px 15px 12px;
+  height: 100%; transition: border-color .2s ease;}
+[data-testid="stMetric"]:hover {border-color: #21394f;}
+[data-testid="stMetricLabel"] p {color: #8599ab !important; font-size: .8rem !important; font-weight: 500;}
+[data-testid="stMetricValue"] {white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums; letter-spacing: -0.01em;}
+[data-testid="stMetricDelta"] {font-size: .8rem; font-variant-numeric: tabular-nums;}
+[data-testid="stMetricChart"] svg {background-color: transparent !important;}
 /* metric rows built with ui.metrics(): responsive grid that wraps instead of squashing */
 .block-container {container-type: inline-size;}
 div[class*="st-key-sfc"] {display: grid !important; gap: .6rem;}
@@ -81,69 +104,78 @@ div[class*="st-key-sfrule"] [data-testid="stHorizontalBlock"] {flex-wrap: wrap; 
 @container (max-width: 520px) {
   div[class*="st-key-sfc3-"], div[class*="st-key-sfc6-"] {grid-template-columns: repeat(2, minmax(0, 1fr));}}
 
-/* ---------- tabs ---------- */
-.stTabs [data-baseweb="tab-list"] {gap: 1.4rem; border-bottom: 1px solid #1f2836; overflow-x: auto; scrollbar-width: none;}
-.stTabs [data-baseweb="tab"] {padding: .55rem 0; font-weight: 500;}
-.stTabs [data-baseweb="tab"] p {font-size: .92rem;}
-.stTabs [aria-selected="true"] p {color: #e6e9ef; font-weight: 600;}
+/* ---------- tabs, buttons, inputs ---------- */
+.stTabs [data-baseweb="tab-list"] {gap: 1.6rem; border-bottom: 1px solid #152738; overflow-x: auto; scrollbar-width: none;}
+.stTabs [data-baseweb="tab"] {padding: .6rem 0; font-weight: 500;}
+.stTabs [data-baseweb="tab"] p {font-size: .92rem; color: #8599ab; transition: color .15s ease;}
+.stTabs [data-baseweb="tab"]:hover p {color: #c9d8e3;}
+.stTabs [aria-selected="true"] p {color: #e4edf3; font-weight: 600;}
+[data-testid="stBaseButton-primary"] {color: #03121d !important; font-weight: 600; border: none;}
+[data-testid="stBaseButton-primary"] p {color: #03121d !important;}
+[data-testid="stBaseButton-primary"]:hover {background: #62bbea !important;}
+[data-testid="stBaseButton-secondary"] {background: #0b1824; border-color: #1d3347;}
+[data-testid="stBaseButton-secondary"]:hover {border-color: #3fa9e0; color: #e4edf3;}
+button:focus-visible, a:focus-visible {outline: 2px solid #8fcdf2 !important; outline-offset: 2px;}
 
 /* ---------- cards and text ---------- */
-.sf-card {background: #111722; border: 1px solid #1f2836; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;}
+.sf-card {background: #0b1824; border: 1px solid #152738; border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;}
 .sf-card.buy {border-left: 3px solid #2dd4a3;} .sf-card.sell {border-left: 3px solid #ff5c7a;}
-.sf-card .t {font-weight: 600; font-size: 1.02rem; color: #e6e9ef;}
-.sf-card .row {margin-top: 6px; font-size: .86rem; color: #c9d1dc;}
-.sf-hero {background: linear-gradient(135deg, #121a26 0%, #0f141c 100%); border: 1px solid #1f2836; border-radius: 14px;
+.sf-card .t {font-weight: 600; font-size: 1.02rem; color: #e4edf3;}
+.sf-card .row {margin-top: 6px; font-size: .87rem; color: #b4c4d1; line-height: 1.55;}
+.sf-hero {background: #0b1824; border: 1px solid #152738; border-left: 3px solid #3fa9e0; border-radius: 10px;
   padding: 18px 20px; margin-bottom: 14px;}
-.sf-hero .k {color: #8b95a7; font-size: .72rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600;}
-.sf-hero .v {font-size: 1.9rem; font-weight: 700; letter-spacing: -0.02em; color: #e6e9ef; line-height: 1.25;}
-.sf-hero .s {color: #8b95a7; font-size: .88rem; margin-top: 4px; line-height: 1.5;}
-.sf-pill {display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .72rem; font-weight: 600;
-  margin-right: 6px; letter-spacing: .02em; white-space: nowrap; vertical-align: middle;}
-.sf-pos {background: rgba(45,212,163,.13); color: #2dd4a3;} .sf-neg {background: rgba(255,92,122,.13); color: #ff7a93;}
-.sf-neu {background: rgba(139,149,167,.14); color: #c3cad6;} .sf-info {background: rgba(78,168,255,.13); color: #7cc4ff;}
-.sf-muted {color: #8b95a7; font-size: .85rem;}
+.sf-hero .k {color: #8599ab; font-size: .82rem; font-weight: 500;}
+.sf-hero .v {font-size: 1.95rem; font-weight: 500; letter-spacing: -0.02em; color: #eef4f7; line-height: 1.25;
+  font-variant-numeric: tabular-nums;}
+.sf-hero .s {color: #8599ab; font-size: .88rem; margin-top: 4px; line-height: 1.55;}
+.sf-pill {display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: .74rem; font-weight: 600;
+  margin-right: 6px; white-space: nowrap; vertical-align: middle;}
+.sf-pos {background: rgba(45,212,163,.12); color: #2dd4a3;} .sf-neg {background: rgba(255,92,122,.12); color: #ff7a93;}
+.sf-neu {background: rgba(133,153,171,.14); color: #bccad6;} .sf-info {background: rgba(63,169,224,.14); color: #8fcdf2;}
+.sf-muted {color: #8599ab; font-size: .85rem;}
 .sf-up {color: #2dd4a3;} .sf-down {color: #ff7a93;}
-.sf-note {color: #aab3c2; font-size: .9rem; line-height: 1.55;}
-.sf-kv {display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0 1.6rem; margin: .2rem 0 .6rem 0;}
-.sf-kv div {display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid #18202b; font-size: .88rem;}
-.sf-kv span:first-child {color: #8b95a7;} .sf-kv span:last-child {color: #e6e9ef; font-weight: 500; text-align: right;}
+.sf-note {color: #a9bccb; font-size: .9rem; line-height: 1.6;}
+.sf-kv {display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 0 1.6rem; margin: .2rem 0 .6rem 0;
+  font-variant-numeric: tabular-nums;}
+.sf-kv div {display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-bottom: 1px solid #12212f; font-size: .88rem;}
+.sf-kv span:first-child {color: #8599ab;} .sf-kv span:last-child {color: #e4edf3; font-weight: 500; text-align: right;}
 
 /* ---------- checklists ---------- */
 .sf-cklist {display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 0 1.6rem;}
-.sf-ckrow {display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid #18202b; font-size: .9rem; color: #e6e9ef;}
-.sf-ckrow .w {color: #8b95a7; font-size: .8rem; margin-top: 2px; line-height: 1.45;}
+.sf-ckrow {display: flex; gap: 10px; padding: 9px 0; border-bottom: 1px solid #12212f; font-size: .9rem; color: #e4edf3;}
+.sf-ckrow .w {color: #8599ab; font-size: .8rem; margin-top: 2px; line-height: 1.45;}
 .sf-ck {flex: 0 0 20px; height: 20px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center;
   font-size: .72rem; font-weight: 700; margin-top: 1px;}
 .sf-ck.ok {background: rgba(45,212,163,.15); color: #2dd4a3;} .sf-ck.no {background: rgba(255,92,122,.13); color: #ff7a93;}
-.sf-ck.na {background: rgba(139,149,167,.14); color: #8b95a7;}
+.sf-ck.na {background: rgba(133,153,171,.14); color: #8599ab;}
 
 /* ---------- news ---------- */
-.sf-news {padding: 11px 0; border-bottom: 1px solid #18202b;}
-.sf-news a {color: #e6e9ef !important; text-decoration: none !important; font-weight: 500; line-height: 1.45;}
-.sf-news a:hover {color: #7cc4ff !important;}
-.sf-news .m {color: #8b95a7; font-size: .78rem; margin-top: 3px;}
-.sf-news .d {color: #9aa4b2; font-size: .85rem; margin-top: 4px; line-height: 1.5;}
+.sf-news {padding: 12px 0; border-bottom: 1px solid #12212f;}
+.sf-news a {color: #e4edf3 !important; text-decoration: none !important; font-weight: 500; line-height: 1.45;}
+.sf-news a:hover {color: #8fcdf2 !important;}
+.sf-news .m {color: #8599ab; font-size: .78rem; margin-top: 3px;}
+.sf-news .d {color: #98abbb; font-size: .86rem; margin-top: 4px; line-height: 1.55;}
 
 /* ---------- misc ---------- */
-[data-testid="stExpander"] details {border-color: #1f2836; border-radius: 10px;}
+[data-testid="stExpander"] details {border-color: #152738; border-radius: 10px; background: rgba(11,24,36,.5);}
 [data-testid="stExpander"] summary p {font-weight: 500;}
-[data-testid="stSidebarNav"] a span {font-size: .92rem;}
-[data-testid="stCaptionContainer"] {color: #8b95a7;}
-.sf-tape {white-space: nowrap; overflow: hidden; border-bottom: 1px solid #1f2836; padding: 6px 0 10px 0; margin-bottom: 8px;}
+[data-testid="stCaptionContainer"] {color: #8599ab;}
+[data-testid="stAlert"] {border-radius: 10px;}
+.sf-tape {white-space: nowrap; overflow: hidden; border-bottom: 1px solid #152738; padding: 6px 0 10px 0; margin-bottom: 8px;}
 /* ---------- strategy playbook ---------- */
 .sf-strats {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .7rem; margin-bottom: .6rem;}
 @container (max-width: 1000px) {.sf-strats {grid-template-columns: repeat(2, minmax(0, 1fr));}}
 @container (max-width: 560px) {.sf-strats {grid-template-columns: minmax(0, 1fr);}}
-.sf-strat {background: linear-gradient(160deg, #131b27 0%, #0f141c 100%); border: 1px solid #1f2836;
-  border-top: 3px solid var(--c); border-radius: 12px; padding: 13px 15px;}
-.sf-strat .nm {font-weight: 650; color: #e6e9ef; font-size: .98rem;}
-.sf-strat .tg {color: var(--c); font-size: .7rem; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; margin-top: 2px;}
-.sf-strat .big {font-size: 1.6rem; font-weight: 700; color: #e6e9ef; letter-spacing: -0.02em; margin-top: 6px;}
-.sf-strat .big span {font-size: .8rem; color: #8b95a7; font-weight: 500;}
-.sf-strat .sub {color: #aab3c2; font-size: .78rem;}
-.sf-strat .bl {color: #8b95a7; font-size: .8rem; margin-top: 7px; line-height: 1.45;}
-.sf-steps {margin: 8px 0 0 0; padding-left: 1.2rem; font-size: .87rem; color: #c9d1dc; line-height: 1.55;}
-.sf-steps li {margin-bottom: 6px;} .sf-steps b {color: #e6e9ef;}
+.sf-strat {background: #0b1824; border: 1px solid #152738; border-top: 2px solid var(--c); border-radius: 10px; padding: 14px 16px;}
+.sf-strat .nm {font-weight: 600; color: #e4edf3; font-size: .98rem;}
+.sf-strat .tg {color: var(--c); font-size: .78rem; font-weight: 500; margin-top: 2px;}
+.sf-strat .big {font-size: 1.65rem; font-weight: 500; color: #eef4f7; letter-spacing: -0.02em; margin-top: 8px;
+  font-variant-numeric: tabular-nums;}
+.sf-strat .big span {font-size: .8rem; color: #8599ab; font-weight: 400;}
+.sf-strat .sub {color: #a9bccb; font-size: .8rem;}
+.sf-strat .bl {color: #8599ab; font-size: .8rem; margin-top: 8px; line-height: 1.5;}
+.sf-steps {margin: 8px 0 0 0; padding-left: 1.2rem; font-size: .88rem; color: #b4c4d1; line-height: 1.6;}
+.sf-steps li {margin-bottom: 6px;} .sf-steps b {color: #e4edf3;}
 </style>
 """
 
@@ -151,6 +183,17 @@ div[class*="st-key-sfrule"] [data-testid="stHorizontalBlock"] {flex-wrap: wrap; 
 def setup():
     st.markdown(CSS, unsafe_allow_html=True)
     init_state()
+
+
+def asset(name: str) -> str:
+    """A text file from ``sharkfin/assets`` (e.g. the landing page's ocean), re-read when it changes."""
+    p = Path(__file__).with_name("assets") / name
+    return _read_asset(p, p.stat().st_mtime)
+
+
+@functools.lru_cache(maxsize=16)
+def _read_asset(path: Path, mtime: float) -> str:
+    return path.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +559,25 @@ def price_chart(df: pd.DataFrame, symbol: str, overlays=("SMA 50", "SMA 200"), l
     if isinstance(df.index, pd.DatetimeIndex) and not (df.index.dayofweek >= 5).any():
         fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])])  # hide weekend gaps (not for crypto)
     return fig
+
+
+WALK_FORWARD_NOTE = ("Walk-forward test: each year's settings were picked using only the three years before it, then "
+                     "traded on that year untouched. Only those unseen years are shown, so every number here is out "
+                     "of sample.")
+
+
+def walk_forward_table(wf: dict, key: str, note: str = ""):
+    """The folds of a walk-forward test: when settings were picked, what was chosen, and how the next year went."""
+    f = wf["folds"].drop(columns=["settings", "Fold"], errors="ignore")
+    st.dataframe(f, hide_index=True, width="stretch", key=key, column_config={
+        "Train Sharpe": st.column_config.NumberColumn("Sharpe when picked", format="%.2f"),
+        "Test return": st.column_config.NumberColumn("Next year's return", format="percent"),
+        "Test Sharpe": st.column_config.NumberColumn("Next year's Sharpe", format="%.2f"),
+        "Test worst drop": st.column_config.NumberColumn("Next year's worst drop", format="percent")})
+    stable = wf.get("stable")
+    kept = (f" The settings carried over from one year to the next {stable:.0%} of the time."
+            if stable is not None and np.isfinite(stable) else "")
+    st.caption(WALK_FORWARD_NOTE + kept + (" " + note if note else ""))
 
 
 def disclaimer():

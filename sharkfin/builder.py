@@ -22,7 +22,7 @@ import numpy as np
 import pandas as pd
 
 from . import indicators as ind
-from . import risk
+from . import risk, walkforward
 
 
 @dataclass(frozen=True)
@@ -105,7 +105,7 @@ def _obv_gap(d, n):
 def _market_gap(d, n, m):
     if m is None or len(m) == 0:
         return pd.Series(np.nan, index=d.index)
-    m = m.reindex(d.index).ffill()
+    m = walkforward.carry_forward(m.reindex(m.index.union(d.index))).reindex(d.index)
     return (m / ind.sma(m, n) - 1) * 100
 
 
@@ -183,7 +183,7 @@ def signals(ohlcv: pd.DataFrame, s: dict, market: pd.Series | None = None) -> tu
     else:
         entry = pd.Series(False, index=idx)
     if s.get("market_filter") and market is not None and len(market):
-        m = market.reindex(idx).ffill()
+        m = walkforward.carry_forward(market.reindex(market.index.union(idx))).reindex(idx)
         entry &= (m > ind.sma(m, 200)).fillna(False)
     ex = [condition_mask(ohlcv, c, market) for c in s.get("exit", [])]
     exit_ = pd.concat(ex, axis=1).any(axis=1) if ex else pd.Series(False, index=idx)
@@ -201,9 +201,11 @@ def warmup(s: dict) -> int:
 
 
 def run(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float = 0.0,
-        market: pd.Series | None = None, start: pd.Timestamp | None = None) -> dict:
+        market: pd.Series | None = None, start: pd.Timestamp | None = None, liquidate: bool = False) -> dict:
     """Simulate the strategy. Returns daily returns, equity, trades, stats and the
-    buy-and-hold comparison over exactly the same dates."""
+    buy-and-hold comparison over exactly the same dates. ``liquidate`` sells anything still held at the last
+    close (with costs), as a walk-forward test window does. One fixed rule set over the whole span is an
+    in-sample test: ``walk_forward`` gives the out-of-sample version."""
     d = ohlcv.dropna(subset=["Open", "High", "Low", "Close"])
     entry, exit_ = signals(d, s, market)
     first = max(warmup(s), 1)
@@ -265,6 +267,9 @@ def run(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float = 0.0,
         elif ent[i] and i < len(d) - 1:
             pend_in = True
         eq[j] = cash + shares * c[i]
+    if liquidate and shares > 0:
+        close_trade(len(d) - 1, c[-1], "End of test window")
+        eq[-1] = cash
 
     idx = d.index[first:]
     equity = pd.Series(eq, index=idx)
@@ -374,3 +379,78 @@ def compare_templates(ohlcv: pd.DataFrame, names: list[str], cost_bps: float, rf
     tpls = {n: template(n) for n in names}
     start = ohlcv.index[min(max(warmup(t) for t in tpls.values()), len(ohlcv) - 31)]
     return {n: run(ohlcv, t, cost_bps, rf, market, start=start) for n, t in tpls.items()}
+
+
+# ---------------------------------------------------------------------------
+# Walk-forward
+# ---------------------------------------------------------------------------
+
+STEPS = (0.8, 1.0, 1.2)
+MAX_KNOBS = 3
+
+
+def knobs(s: dict) -> list[tuple[str, tuple, float]]:
+    """The numbers in a strategy that the walk-forward may tune, at most ``MAX_KNOBS``: buy-rule levels first,
+    then sell-rule levels, then the risk exits, then indicator lengths. Each is (label, path, current value)."""
+    found = []
+    for side, name in (("entry", "Buy rule"), ("exit", "Sell rule")):
+        for i, c in enumerate(s.get(side, [])):
+            if c.get("rhs", VALUE) == VALUE and c["op"] not in UNARY and float(c.get("value", 0)) != 0:
+                found.append((f"{name} {i + 1} level", (side, i, "value"), float(c["value"])))
+    for k, name in (("stop", "Stop loss %"), ("target", "Take profit %"), ("trail", "Trailing stop %")):
+        if s.get(k):
+            found.append((name, (k,), float(s[k])))
+    for side, name in (("entry", "Buy rule"), ("exit", "Sell rule")):
+        for i, c in enumerate(s.get(side, [])):
+            if c.get("n"):
+                found.append((f"{name} {i + 1} length", (side, i, "n"), float(c["n"])))
+    return found[:MAX_KNOBS]
+
+
+def _set(s: dict, path: tuple, v):
+    if len(path) == 1:
+        s[path[0]] = v
+    else:
+        s[path[0]][path[1]][path[2]] = v
+
+
+def tuned(s: dict, settings: dict) -> dict:
+    """A copy of ``s`` with the walk-forward's chosen numbers put in."""
+    out = copy.deepcopy(s)
+    for label, path, _ in knobs(s):
+        if label in settings:
+            _set(out, path, settings[label])
+    return out
+
+
+def walk_forward(ohlcv: pd.DataFrame, s: dict, cost_bps: float = 5.0, rf: float = 0.0,
+                 market: pd.Series | None = None, progress=None) -> dict:
+    """The strategy graded out of sample: each year, up to three of its numbers are picked from 80%, 100% and
+    120% of what you set, using the three years before that year only (see ``walkforward``); then the rules
+    are traded on that year. With no numbers to tune, the rules simply run fold by fold."""
+    d = ohlcv.dropna(subset=["Open", "High", "Low", "Close"])
+    ks = knobs(s)
+    axes = {}
+    for label, path, v in ks:
+        vals = [v * f for f in STEPS]
+        axes[label] = sorted({max(2, int(round(x))) for x in vals}) if path[-1] == "n" else [round(x, 4) for x in vals]
+    points = walkforward.grid(**axes) if axes else [{}]
+    first = max(warmup(tuned(s, p)) for p in points)
+    hold = int(s.get("max_days") or 0)
+
+    def evaluate(data, p, start):
+        res = run(data["ohlcv"], tuned(s, p), cost_bps, rf, data["market"], start=start, liquidate=True)
+        return {"returns": res["returns"], "trades": res["trades"]}
+
+    rf_s = pd.Series(rf / 252, index=d.index)
+    wf = walkforward.run(evaluate, {"ohlcv": d, "market": market}, points,
+                         walkforward.folds(d.index, purge=hold, first=first), rf_s, progress)
+    r = wf["returns"]
+    bh = d["Close"].pct_change(fill_method=None).reindex(r.index).fillna(0.0)
+    bh.iloc[0] = 0.0
+    wf["bh_equity"] = (1 + bh).cumprod()
+    exposure = float(len(wf["trades"]) and wf["trades"]["Days"].sum() / max(len(r), 1))
+    wf["stats"] = summarize(r, bh, wf["trades"] if len(wf["trades"]) else pd.DataFrame(columns=["Return", "Days"]),
+                            rf, min(1.0, exposure))
+    wf["knobs"] = [k[0] for k in ks]
+    return wf

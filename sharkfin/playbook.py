@@ -18,6 +18,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from . import walkforward
+
 DATA = Path(__file__).with_name("research_data") / "strategy_returns.csv"
 PICK = ("2016-01-04", "2021-10-12")
 GRADE = ("2021-10-13", "2026-10-12")
@@ -31,7 +33,10 @@ WEIGHTS = {LD: 0.5, BR: 0.2, DN: 0.3}
 COLORS = {LD: "#2dd4a3", BR: "#4ea8ff", DN: "#a78bfa", "The plan": "#f5a524", "S&P 500 (SPY)": "#8b95a7",
           "Nasdaq-100 (QQQ)": "#5f6b7d"}
 
-# Graded on Oct 2021 - Oct 2026 in the research (trade stats from the research's own trade lists).
+# Graded on Oct 2021 - Oct 2026 in the research (trade stats from the research's own trade lists). Settings were
+# picked on earlier data, so this window is out of sample: one walk-forward step. Sharpe ratios are after T-bills
+# (the legs' 1.06 / 0.66 quoted earlier were before T-bills). The night leg decided on the 16:00 close, which
+# can't be traded, so its numbers are somewhat optimistic; the app's own night leg decides at 15:30.
 FACTS = {
     LD: {"return": 0.331, "sharpe": 1.40, "worst": -0.18, "win": 0.64, "edge": 0.017, "avg_win": 0.054,
          "avg_loss": -0.050, "payoff": 1.07, "pf": 1.92, "trades_yr": 96, "hold": "5 days", "y2022": -0.057,
@@ -42,9 +47,9 @@ FACTS = {
     DN: {"return": 0.346, "sharpe": 1.06, "worst": -0.30, "win": None, "edge": None, "trades_yr": 158, "hold": "hours / overnight",
          "y2022": 0.194, "older": "32% a year in 2016-21, when the settings were picked",
          "stress": "the edge is 0.2-0.3% a trade, so every 0.1% of extra slippage costs a third of it",
-         "legs": {"Day": {"return": 0.201, "sharpe": 1.06, "worst": -0.13, "win": 0.46, "edge": 0.0018, "avg_win": 0.0139,
+         "legs": {"Day": {"return": 0.201, "sharpe": 0.86, "worst": -0.13, "win": 0.46, "edge": 0.0018, "avg_win": 0.0139,
                           "avg_loss": -0.0085, "trades_yr": 109},
-                  "Night": {"return": 0.121, "sharpe": 0.66, "worst": -0.34, "win": 0.57, "edge": 0.0028, "avg_win": 0.0207,
+                  "Night": {"return": 0.121, "sharpe": 0.47, "worst": -0.34, "win": 0.57, "edge": 0.0028, "avg_win": 0.0207,
                             "avg_loss": -0.0210, "trades_yr": 49}}},
     "S&P 500 (SPY)": {"return": 0.139, "sharpe": 0.63, "worst": -0.25, "y2022": -0.182},
     "Nasdaq-100 (QQQ)": {"return": 0.165, "sharpe": 0.61, "worst": -0.35, "y2022": -0.326},
@@ -158,3 +163,22 @@ def correlations(d: pd.DataFrame, names=(LD, BR, DN, "S&P 500 (SPY)"), start=GRA
     if down_days:
         X = X[d["spy"].reindex(X.index) < -0.01]
     return X.corr()
+
+
+def walk_forward_mix(d: pd.DataFrame, names=(LD, BR, DN), step: float = 0.1) -> dict:
+    """The mix with its weights re-picked every year on the three years before it (the best Sharpe, as
+    ``best_weights`` does), then held for that year. Only the strategies' weights are re-picked here: each
+    strategy's own settings come from the research and were chosen on 2016-21."""
+    X = pd.DataFrame({k: sleeve(d, k) for k in names}).dropna()
+    pieces, rows = [], []
+    for f in walkforward.folds(X.index):
+        w = best_weights(walkforward.cut(d, f.train_end), names, step, f.train_start, f.train_end)
+        r = mix(walkforward.cut(d, f.test_end), w, f.test_start, f.test_end)
+        pieces.append(r)
+        e = (1 + r).cumprod()
+        rows.append({"Picked on": f"{f.train_start:%b %Y} - {f.train_end:%b %Y}",
+                     "Used in": f"{f.test_start:%b %Y} - {f.test_end:%b %Y}",
+                     **{k: float(w[k]) for k in names}, "Return": float(e.iloc[-1] - 1),
+                     "Sharpe": walkforward.sharpe(r, d["tbill"])})
+    r = pd.concat(pieces).sort_index()
+    return {"returns": r, "folds": pd.DataFrame(rows), "stats": stats(r, d["tbill"])}

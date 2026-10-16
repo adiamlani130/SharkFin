@@ -1,1 +1,22 @@
-{"0": "News & Playbook Pages", "1": "Valuation & Long Checklist", "2": "Scanner Page", "3": "Catalysts & Screens", "4": "Portfolio Optimization", "5": "Test Fakes & Harness", "6": "Return Forecasting Models", "7": "Docs & Feature History", "8": "Market Data Layer", "9": "Tech Breakout Rider", "10": "Leader Dip Strategy", "11": "Technical Indicators", "12": "Live Strategy Signals", "13": "SharkFin Ratings", "14": "App Entry & AI Analyst", "15": "Factor Ranking", "16": "Core Tests & Stats", "17": "Strategy Playbook Mix", "18": "Scan Data Loading", "19": "TQQQ Day + Night", "20": "Home & Market Status", "21": "Alpaca & Earnings Cache", "22": "Old Research Page", "23": "Old Utils & News", "24": "Macro & Regime Data", "25": "Old Prediction Page", "26": "Support/Resistance Levels", "27": "Old Top Performers", "28": "Caching & Prefetch", "29": "Old Portfolio Page", "30": "Backtest Engine", "31": "Alpaca Realtime Trades", "32": "Old Home Page", "33": "Price Chart", "34": "Old Logo", "35": "Current Logo", "36": "graphify Rules"}
+{
+  "0": "News & Playbook Pages",
+  "1": "Valuation & Long Checklist",
+  "4": "Portfolio Optimization",
+  "5": "Test Fakes & Harness",
+  "6": "Return Forecasting Models",
+  "7": "Docs & Feature History",
+  "9": "Tech Breakout Rider",
+  "12": "Live Strategy Signals",
+  "17": "Strategy Playbook Mix",
+  "21": "Alpaca & Earnings Cache",
+  "22": "Old Research Page",
+  "23": "Old Utils & News",
+  "24": "Macro & Regime Data",
+  "25": "Old Prediction Page",
+  "27": "Old Top Performers",
+  "28": "Caching & Prefetch",
+  "29": "Old Portfolio Page",
+  "34": "Old Logo",
+  "35": "Current Logo",
+  "36": "graphify Rules"
+}
