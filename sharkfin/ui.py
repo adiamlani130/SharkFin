@@ -173,6 +173,95 @@ button:focus-visible, a:focus-visible {outline: 2px solid #8fcdf2 !important; ou
 .sf-strat .bl {color: #8599ab; font-size: .8rem; margin-top: 8px; line-height: 1.5;}
 .sf-steps {margin: 8px 0 0 0; padding-left: 1.2rem; font-size: .88rem; color: #b4c4d1; line-height: 1.6;}
 .sf-steps li {margin-bottom: 6px;} .sf-steps b {color: #e4edf3;}
+
+/* ---------- speculation radar ---------- */
+.sf-themes {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: .3rem 0 1rem;}
+@container (max-width: 1000px) {.sf-themes {grid-template-columns: repeat(2, minmax(0, 1fr));}}
+@container (max-width: 600px) {.sf-themes {grid-template-columns: minmax(0, 1fr);}}
+.sf-theme {position: relative; background: linear-gradient(180deg, rgba(16,34,51,.9), #0b1824 60%); border: 1px solid #152738;
+  border-radius: 12px; padding: 14px 16px 13px; overflow: hidden;
+  transition: transform .35s var(--sf-ease), border-color .35s ease, box-shadow .35s ease;
+  animation: sf-rise .6s var(--sf-ease) both;}
+.sf-theme::before {content: ""; position: absolute; inset: 0 0 auto 0; height: 2px; background: var(--c); opacity: .85;}
+.sf-theme:hover {transform: translateY(-3px); border-color: #24405a; box-shadow: 0 14px 30px -18px rgba(0,0,0,.8);}
+.sf-theme .top {display: flex; align-items: center; gap: 4px; flex-wrap: wrap;}
+.sf-theme .hz {margin-left: auto; color: #6f879b; font-size: .74rem;}
+.sf-theme .nm {font-weight: 600; color: #eef4f7; font-size: 1.04rem; margin-top: 10px;}
+.sf-theme .tg {color: #9fb3c3; font-size: .85rem; line-height: 1.5; margin-top: 4px;}
+.sf-theme .nums {display: flex; gap: 14px; flex-wrap: wrap; margin-top: 10px; font-size: .78rem; color: #8599ab;
+  font-variant-numeric: tabular-nums;}
+.sf-theme .nums b {font-weight: 600; color: #e4edf3;} .sf-theme .nums b.sf-up {color: #2dd4a3;} .sf-theme .nums b.sf-down {color: #ff7a93;}
+.sf-theme .tk {margin-top: 10px; display: flex; flex-wrap: wrap; gap: 4px;}
+.sf-theme .tk code {background: rgba(63,169,224,.1); color: #9fd2f0; border-radius: 5px; padding: 1px 6px; font-size: .74rem;}
+.sf-themes .sf-theme:nth-child(2) {animation-delay: .04s} .sf-themes .sf-theme:nth-child(3) {animation-delay: .08s}
+.sf-themes .sf-theme:nth-child(4) {animation-delay: .12s} .sf-themes .sf-theme:nth-child(5) {animation-delay: .16s}
+.sf-themes .sf-theme:nth-child(6) {animation-delay: .2s} .sf-themes .sf-theme:nth-child(n+7) {animation-delay: .24s}
+.sf-stages {display: grid; gap: 8px;} .sf-stage {display: flex; gap: 10px; align-items: baseline; font-size: .88rem; color: #b4c4d1;}
+.sf-stage .sf-pill {flex: 0 0 auto; min-width: 84px; text-align: center;}
+.sf-cols {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1.2rem; margin-top: .4rem;}
+@container (max-width: 700px) {.sf-cols, .sf-cols.two {grid-template-columns: minmax(0, 1fr);}}
+.sf-cols.two {grid-template-columns: repeat(2, minmax(0, 1fr));}
+.sf-cols h5, .sf-h5 {font-size: .82rem !important; color: #8599ab !important; font-weight: 600 !important; margin: .3rem 0 0 !important;
+  padding: 0 !important; text-transform: uppercase; letter-spacing: .05em;}
+.sf-steps.ok li::marker {color: #2dd4a3;} .sf-steps.bad li::marker {color: #ff7a93;}
+.sf-timeline li {padding-left: 2px;}
+
+/* ---------- motion: soft entrances and smooth state changes ---------- */
+:root {--sf-ease: cubic-bezier(.22,.8,.24,1);}
+html {scroll-behavior: smooth;}
+@keyframes sf-rise {from {opacity: 0; transform: translateY(10px);} to {opacity: 1; transform: none;}}
+@keyframes sf-fade {from {opacity: 0;} to {opacity: 1;}}
+/* new page content glides in once; elements that stay on screen across reruns don't replay it */
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > [data-testid="stElementContainer"],
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > [data-testid="stLayoutWrapper"],
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > [data-testid="stHorizontalBlock"] {
+  animation: sf-rise .5s var(--sf-ease) both;}
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > :nth-child(2) {animation-delay: .03s;}
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > :nth-child(3) {animation-delay: .06s;}
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > :nth-child(4) {animation-delay: .09s;}
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > :nth-child(5) {animation-delay: .12s;}
+[data-testid="stMainBlockContainer"] > div > [data-testid="stVerticalBlock"] > :nth-child(n+6) {animation-delay: .15s;}
+.sf-rise {animation: sf-rise .6s var(--sf-ease) both;}
+.sf-head h1 {animation: sf-rise .55s var(--sf-ease) both;}
+.sf-head p {animation: sf-rise .55s .06s var(--sf-ease) both;}
+.sf-head {position: relative;}
+.sf-head::after {content: ""; position: absolute; left: 0; bottom: -1px; height: 1px; width: 120px;
+  background: linear-gradient(90deg, #3fa9e0, transparent); animation: sf-fade 1s .2s ease both;}
+.sf-card, .sf-hero, .sf-strat, [data-testid="stMetric"] {
+  transition: transform .3s var(--sf-ease), border-color .3s ease, box-shadow .3s ease, background-color .3s ease;}
+.sf-card:hover, .sf-strat:hover {transform: translateY(-2px); border-color: #21394f; box-shadow: 0 12px 26px -18px rgba(0,0,0,.85);}
+[data-testid="stMetric"]:hover {transform: translateY(-1px); box-shadow: 0 10px 22px -18px rgba(0,0,0,.9);}
+.sf-hero {background: linear-gradient(135deg, rgba(63,169,224,.08), rgba(11,24,36,0) 55%), #0b1824;}
+[data-testid="stBaseButton-primary"], [data-testid="stBaseButton-secondary"], [data-testid="stBaseButton-pills"],
+[data-testid="stBaseButton-segmented_control"], [data-testid="stBaseButton-pillsActive"],
+[data-testid="stBaseButton-segmented_controlActive"] {
+  transition: background-color .2s ease, border-color .2s ease, color .2s ease, transform .15s ease, box-shadow .2s ease !important;}
+[data-testid="stBaseButton-primary"]:hover {box-shadow: 0 6px 18px -8px rgba(63,169,224,.7);}
+[data-testid="stBaseButton-primary"]:active, [data-testid="stBaseButton-secondary"]:active {transform: translateY(1px) scale(.99);}
+.stTabs [data-baseweb="tab-highlight"] {transition: left .35s var(--sf-ease), width .35s var(--sf-ease) !important;
+  background: #3fa9e0 !important; height: 2px !important; border-radius: 2px;}
+.stTabs [data-baseweb="tab-panel"] {animation: sf-fade .35s ease both;}
+[data-testid="stExpander"] details {transition: border-color .25s ease, background-color .25s ease;}
+[data-testid="stExpander"] details:hover {border-color: #21394f;}
+[data-testid="stExpander"] details[open] > div {animation: sf-fade .3s ease both;}
+[data-testid="stExpander"] summary svg {transition: transform .25s var(--sf-ease);}
+[data-testid="stSidebarNavLink"] {transition: background-color .2s ease, box-shadow .25s var(--sf-ease) !important;}
+[data-testid="stSidebarNavLink"]:hover {background: rgba(63,169,224,.07);}
+[data-testid="stPlotlyChart"], [data-testid="stDataFrame"] {animation: sf-fade .45s ease both;}
+[data-testid="stDataFrame"] {border-radius: 10px; overflow: hidden;}
+[data-baseweb="select"] > div, [data-baseweb="input"], [data-testid="stNumberInputContainer"] {
+  transition: border-color .2s ease, box-shadow .2s ease;}
+[data-baseweb="select"] > div:hover, [data-baseweb="input"]:hover {border-color: #2a4a66 !important;}
+[data-baseweb="popover"] {animation: sf-fade .15s ease both;}
+.sf-news {transition: background-color .2s ease, padding-left .25s var(--sf-ease);}
+.sf-news:hover {background: rgba(63,169,224,.035); padding-left: 6px;}
+[data-testid="stSidebar"] {transition: transform .35s var(--sf-ease), width .35s var(--sf-ease) !important;}
+/* a calmer "running" shimmer instead of the stock flicker while a page recomputes */
+[data-stale="true"] {opacity: .55 !important; transition: opacity .4s ease .15s !important;}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {animation-duration: .01ms !important; animation-delay: 0s !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important;}
+}
 </style>
 """
 

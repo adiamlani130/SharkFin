@@ -792,3 +792,31 @@ def test_price_panel_is_kept_on_disk_and_only_topped_up(monkeypatch, tmp_path):
     assert calls[1:] == [(25, "5d"), (1, "2y")]  # only the latest days, plus S0 again in full
     assert out.index[-1] == new_days[-1] and not out.index.duplicated().any()
     assert out["S1"].iloc[-1] == recent["S1"].iloc[-1]
+
+
+def test_speculation_stages_follow_the_price_action():
+    from sharkfin import speculation as sp
+
+    idx = pd.bdate_range("2022-01-03", periods=600)
+    flat = pd.Series(100.0, index=idx)
+    turning = pd.Series(np.r_[np.linspace(100, 80, 400), np.linspace(80, 105, 200)], index=idx)
+    running = pd.Series(np.geomspace(50, 400, 600), index=idx)
+    cooling = pd.Series(np.r_[np.geomspace(50, 400, 500), np.linspace(400, 240, 100)], index=idx)
+    spy = flat * np.linspace(1, 1.05, 600)
+    assert sp.stats(turning, spy)["stage"] == "Turning up"
+    assert sp.stats(running, spy)["stage"] == "Running"
+    assert sp.stats(cooling, spy)["stage"] == "Cooling"
+    assert sp.stats(pd.Series(np.linspace(120, 90, 600), index=idx), spy)["stage"] == "Quiet"
+    # the history is read one day at a time, so a later crash can't change an earlier reading
+    h1 = sp.stage_history(running.iloc[:400], spy, step=20)
+    h2 = sp.stage_history(pd.concat([running.iloc[:400], pd.Series(1.0, index=idx[400:])]), spy, step=20)
+    assert h2.loc[:h1.index[-1]].equals(h1)
+
+
+def test_every_speculation_theme_is_complete():
+    from sharkfin import speculation as sp
+
+    assert len({t.key for t in sp.THEMES}) == len(sp.THEMES)
+    for t in sp.THEMES:
+        assert t.plays and t.why_now and t.proof and t.risks and t.bottleneck
+        assert all(p.tier in sp.TIER_HELP for p in t.plays)

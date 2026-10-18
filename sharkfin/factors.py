@@ -335,10 +335,13 @@ def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile
         turnover.append(to)
         prev_w = w
         period = rets.iloc[t + 1: end + 1]
-        sp = period[top].mean(axis=1)
+        # A holding that stops trading mid-month (delisted, acquired, halted) is treated as sold at its last price
+        # and held as cash: dropping it from the average would quietly move its money into the survivors.
+        sp = period[top].fillna(0.0).mean(axis=1)
         sp.iloc[0] -= to * 2 * cost_bps / 1e4
         strat.append(sp)
-        bench.append(period[period.columns.intersection(eligible)].mean(axis=1))
+        held_b = prices.iloc[t][period.columns.intersection(eligible)].dropna().index
+        bench.append(period[held_b].fillna(0.0).mean(axis=1))
         common = sc.index.intersection(fwd.dropna().index)
         ics.append(sc[common].rank().corr(fwd[common].rank()))
         spreads.append(fwd[top].mean() - fwd[bot].mean())

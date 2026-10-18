@@ -145,3 +145,19 @@ def test_every_strategy_walks_forward():
     assert len(lab["folds"]) and lab["knobs"]
     fx = factors.walk_forward(ohlc["Close"], members=mem)
     assert len(fx["folds"]) and np.isfinite(fx["ic_mean"])
+
+
+def test_factor_replay_keeps_a_holding_that_stops_trading_in_the_average():
+    # Every stock gains 0.1% a day after day 280. The strongest stock (a big earlier run puts it in the top
+    # fifth) stops trading on day 290. Its money should sit in cash, not move into the other holdings.
+    dates = pd.bdate_range("2018-01-01", periods=400)
+    rng = np.random.default_rng(1)
+    r = np.full((400, 30), 0.001)
+    r[:280] += rng.normal(0, 0.01, (280, 30))
+    r[:280, -1] += 0.004
+    px = pd.DataFrame(100 * np.cumprod(1 + r, axis=0), index=dates, columns=[f"S{i}" for i in range(30)])
+    px.iloc[290:, -1] = np.nan
+    res = factors.backtest_price_composite(px, rebalance=21, quantile=0.2, cost_bps=0)
+    k = int(30 * 0.2)
+    after = res["strategy"].loc[dates[296]:dates[300]]  # same month: the rebalance before was day 273 + 21 = 294
+    assert len(after) and np.allclose(after, 0.001 * (k - 1) / k), after
