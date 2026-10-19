@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sharkfin import nq_lab, nq_regimes, walkforward
+from sharkfin import nq_gex_plays, nq_lab, nq_regimes, walkforward
 
 
 def _market(n_days=700, seed=0):
@@ -38,7 +38,8 @@ def _settings(st):
     return [pts[0], pts[len(pts) // 2], pts[-1]] if len(pts) > 2 else pts
 
 
-@pytest.mark.parametrize("st", nq_lab.CATALOGUE + nq_regimes.catalogue(), ids=lambda s: s.name)
+@pytest.mark.parametrize("st", nq_lab.CATALOGUE + nq_regimes.catalogue() + nq_gex_plays.catalogue(),
+                         ids=lambda s: s.name)
 def test_cutting_off_the_future_changes_no_past_result(st):
     d = _market()
     start = d["px"].index[300]
@@ -147,3 +148,46 @@ def test_swing_router_never_uses_the_return_it_is_deciding_on():
     e["px"].iloc[-1, :4] *= 1.5  # the last day: its decision may use it, earlier ones may not
     b = nq_regimes.swing_router.signal(e, p)
     pd.testing.assert_series_equal(a.iloc[:-1], b.iloc[:-1])
+
+
+@pytest.mark.parametrize("st", nq_gex_plays.catalogue(), ids=lambda s: s.name)
+def test_gex_plays_decide_from_earlier_bars_only(st):
+    """Scramble the last session from bar ``m`` on: none of its decisions made before ``m`` may change, and an
+    options trade opened at 09:35 keeps its strikes and credit. (Earlier sessions feed the next day's levels,
+    so only the last one is scrambled; the cut-off test covers the days.)"""
+    d = _market(400, seed=5)
+    start = d["px"].index[260]
+    for m in (12, 30, 50):
+        rng = np.random.default_rng(m)
+        e = {k: (v.copy() if isinstance(v, pd.DataFrame) else v) for k, v in d.items() if not k.startswith("_")}
+        for k in ("io", "ih", "il", "ic", "ivw"):
+            e[k].iloc[-1, m:] *= np.exp(rng.normal(0, 0.01, nq_lab.BARS - m))
+        e["ih"] = np.maximum(e["ih"], np.maximum(e["io"], e["ic"]))
+        e["il"] = np.minimum(e["il"], np.minimum(e["io"], e["ic"]))
+        for p in _settings(st):
+            runs = []
+            for data in (d, e):
+                nq_lab.TRACE = []
+                try:
+                    st.evaluate(data, p, start)
+                finally:
+                    runs.append(nq_lab.TRACE)
+                    nq_lab.TRACE = None
+            for a, b in zip(*runs):
+                if a[1][-1] <= m:  # entered at the open of bar <= m on the last day: decided before m
+                    for x, y in zip(a[1:], b[1:]):
+                        assert x[-1] == y[-1]
+                np.testing.assert_array_equal(a[1][:-1], b[1][:-1])
+        if "3b" in st.name:
+            p = st.points[0]
+            a = nq_gex_plays.fly_trades(nq_lab.day_view(d), nq_gex_plays.view(d), p)
+            b = nq_gex_plays.fly_trades(nq_lab.day_view(e), nq_gex_plays.view(e), p)
+            cols = ["credit", "risk", "centre"]
+            np.testing.assert_allclose(a[cols].to_numpy(), b[cols].to_numpy())
+
+
+def test_opex_is_the_third_friday_or_the_day_before_a_holiday():
+    days = pd.bdate_range("2025-01-01", "2025-12-31").drop(pd.Timestamp("2025-04-18"))  # Good Friday
+    ox = nq_gex_plays.opex_days(days)
+    got = list(ox.index[ox].strftime("%m-%d"))
+    assert got[:4] == ["01-17", "02-21", "03-21", "04-17"] and len(got) == 12

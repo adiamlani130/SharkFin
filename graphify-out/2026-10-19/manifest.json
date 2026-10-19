@@ -342,21 +342,27 @@
     "semantic_hash": ""
   },
   "sharkfin/nq_lab.py": {
-    "mtime": 1792384049.27437,
-    "seen": 1792384255.1843812,
-    "ast_hash": "2b663ddf90671c77b600a3e99612a801",
+    "mtime": 1792388736.1470196,
+    "seen": 1792389557.0110292,
+    "ast_hash": "58ce8ee7a7f2247e8d939804a9762259",
     "semantic_hash": ""
   },
   "tests/test_nq_lab.py": {
-    "mtime": 1792383540.927228,
-    "seen": 1792384255.1844099,
-    "ast_hash": "b8231bc61b199bcae5b2cebd34d501d3",
+    "mtime": 1792388658.3967319,
+    "seen": 1792389557.011094,
+    "ast_hash": "3c6239f72788fff2c7ae3515b9a6dfe1",
     "semantic_hash": ""
   },
   "docs/NQ_STRATEGY_LAB.md": {
-    "mtime": 1792384252.4193206,
-    "seen": 1792384255.1844144,
-    "ast_hash": "a89b5b5b1cf98c4e9a2a423d6a40e6f9",
+    "mtime": 1792389423.9900777,
+    "seen": 1792389557.0110993,
+    "ast_hash": "a7bcadcf124aa08a9c62884a2147d0bf",
+    "semantic_hash": ""
+  },
+  "sharkfin/nq_regimes.py": {
+    "mtime": 1792389066.2756214,
+    "seen": 1792389557.011032,
+    "ast_hash": "0ff7ec5d1d8fd58e25947357400f1ce0",
     "semantic_hash": ""
   }
 }

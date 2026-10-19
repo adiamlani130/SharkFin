@@ -217,3 +217,77 @@ history is split in two halves to see whether the pattern held:
   - Shorting open-to-close only paid with VIX 24+ and high GEX (+14 bp, but only 60 days).
 - **VIX/VIX3M above 1** (curve inverted) was the best curve band for buying the open (+18 bp) and for IBS and
   RSI(2) dips the next day.
+
+# Part 3: three GEX setups (call-wall fade, negative-gamma breakout, OpEx fly/condor)
+
+Code: `sharkfin/nq_gex_plays.py`. Rerun with `python -m sharkfin.nq_gex_plays DATA_DIR OUT_DIR`. Same walk-forward
+grading and leak rules as Parts 1 and 2 (out-of-sample years about 2019-04 to 2026-10, decisions only from
+finished bars, flat by 15:55, GEX from the prior session).
+
+## What was real and what was approximated
+
+- **Gamma flip:** real. "Above the flip" means SqueezeMetrics GEX (S&P, not Nasdaq) was positive the prior
+  session; "below the flip" means it was negative (274 days since 2016, 104 of them in 2022). "Top-half" and
+  "bottom-20%" rank GEX against the prior 252 sessions only.
+- **VIX regime:** real. Quiet = VIX under a cap and not above its 5-day average; rising = VIX up on the day and
+  above its 5-day average.
+- **Call and put walls:** approximated. There is no free strike-level open-interest history, so the walls are
+  stand-ins, each tried and picked by the walk-forward: the next round $5 or $10 QQQ strike past the prior
+  close, one VXN-implied daily move, or the 20-session high/low.
+- **Options (setup 3):** modelled, not real quotes. A same-day iron butterfly/condor on QQQ is priced with
+  Black-Scholes using the prior VXN close as the volatility, entered at 09:35 and held to the close (or stopped
+  out). $0.01 a leg each way, 2% of the account risked per trade. No skew and no real bid/ask, so treat those
+  numbers as an upper bound. A second run marks the options 15% cheaper (IV x0.85) to show how sensitive it is.
+
+## Does GEX shrink the day? Yes
+
+NQ's 09:35-to-close move as a fraction of the VXN-implied daily move:
+
+| Days | Count | Move / implied | Stayed inside 1 implied move |
+| --- | --- | --- | --- |
+| All days | 2,595 | 0.50 | 88% |
+| Positive GEX + quiet VIX | 1,374 | 0.46 | 90% |
+| Top-half GEX + quiet VIX | 1,051 | 0.43 | 92% |
+| GEX below flip | 254 | 0.68 | 79% |
+| GEX below flip + VIX rising | 140 | 0.68 | 81% |
+| OpEx Fridays | 125 | 0.50 | 84% |
+| OpEx Fridays, top-half GEX + quiet VIX | 59 | 0.43 | 90% |
+
+The "vol map" idea holds: high-gamma quiet days move about 15% less than implied, below-flip days about 35% more.
+OpEx Fridays on their own were not special.
+
+## Results (out of sample)
+
+| Setup | Sharpe | Over cash / yr | Max drop | Trades | Hit rate |
+| --- | --- | --- | --- | --- | --- |
+| 1. Call-wall fade, positive GEX + quiet VIX | -0.56 | -0.8% | -1.9% | 127 | 31% |
+| 1. Call-wall fade, top-half GEX + quiet VIX | -0.87 | -1.2% | -2.9% | 116 | 33% |
+| 1. Call-wall fade, every day (control) | -1.10 | -3.7% | -10.3% | 454 | 28% |
+| 2. Breakdown short, below flip + VIX rising | -0.78 | -2.5% | -17.6% | 67 | 21% |
+| 2. Breakdown short, bottom-20% GEX + VIX rising | -1.01 | -2.6% | -13.6% | 58 | 14% |
+| 2. Breakdown short, below flip | -0.55 | -2.7% | -18.0% | 168 | 28% |
+| 2. Breakout either way, every day (control) | 0.14 | +1.3% | -22.2% | 915 | 44% |
+| 3a. Pin toward nearest strike, top-half GEX + quiet | -0.37 | -0.3% | -1.3% | 30 | 37% |
+| 3a. Pin toward nearest strike, every expiration (control) | 0.07 | +0.2% | -10.5% | 133 | 54% |
+| 3b. Iron fly/condor, top-half GEX + quiet VIX | 2.91 | +7.1% | -1.3% | 148 | 85% |
+| 3b. Iron fly/condor, positive GEX + quiet VIX | 2.91 | +7.2% | -1.7% | 175 | 82% |
+| 3b. Iron fly/condor, every Friday (control) | 3.80 | +14.8% | -2.3% | 374 | 81% |
+| 3b. Same, top-half GEX + quiet, IV x0.85 | 2.05 | +4.6% | -2.0% | 148 | 82% |
+| 3b. Same, every Friday, IV x0.85 | 2.24 | +9.3% | -4.9% | 374 | 74% |
+
+- **1. Call-wall fade:** lost money. Price tagging the "wall" kept going more often than it reversed (hit rate
+  about 30%). Gating to positive-gamma quiet days lost less than fading every day, but it still lost.
+- **2. Negative-gamma breakout:** lost money. Below-flip days are wide, but they whip both ways: shorting the
+  break under the put wall was right only about 1 time in 5, and the misses included sharp squeezes. Taking
+  breakouts both ways every day was roughly flat.
+- **3a. OpEx pin with futures:** nothing. Leaning toward the nearest strike late on expiration Fridays was
+  flat to slightly negative.
+- **3b. Iron fly/condor:** the only setup that made money, but the GEX/VIX filter did not help. Selling every
+  Friday beat selling only on positive-gamma quiet Fridays. Per trade, the filtered days did pay more (with IV
+  x0.85, about +31% of risk on filtered Fridays against +17% on the rest for an ATM fly), and below-flip Fridays
+  lost. So GEX works as a "skip today" switch for short premium, not as an edge by itself.
+- **Why 3b looks so good:** the model sells at VXN, a 30-day implied vol, while the realised 09:35-to-close move
+  is about half of that. Real 0DTE QQQ options are priced closer to realised intraday vol, carry skew, and cost
+  more than a cent to trade, so the real edge is likely much smaller. Mark it 30% cheaper (IV x0.7) and selling
+  every Friday is roughly break-even, while the filtered Fridays still earn about +15% of risk a trade. This
+  needs checking against real option quotes before anyone trades it.

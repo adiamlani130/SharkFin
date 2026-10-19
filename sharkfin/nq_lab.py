@@ -57,7 +57,7 @@ def load(folder: str | Path) -> dict:
                        "raw": 1 / adj})  # raw = multiply an adjusted price by this to get the traded price
     days = px.index
     out = {"px": px}
-    for k, name in (("vix", "VIX"), ("vix9d", "VIX9D"), ("vix3m", "VIX3M"), ("vvix", "VVIX")):
+    for k, name in (("vix", "VIX"), ("vix9d", "VIX9D"), ("vix3m", "VIX3M"), ("vvix", "VVIX"), ("vxn", "VXN")):
         try:
             out[k] = wf.carry_forward(daily(name)["Close"].reindex(days))
         except FileNotFoundError:
@@ -89,7 +89,7 @@ def fetch(folder: str | Path) -> None:
 
     f = Path(folder)
     f.mkdir(parents=True, exist_ok=True)
-    for sym in ("QQQ", "^VIX", "^VIX9D", "^VIX3M", "^VVIX", "^IRX"):
+    for sym in ("QQQ", "^VIX", "^VIX9D", "^VIX3M", "^VVIX", "^VXN", "^IRX"):
         h = yf.Ticker(sym).history(period="max", interval="1d", auto_adjust=False)
         h.index = pd.DatetimeIndex(h.index).tz_localize(None).normalize()
         h.to_csv(f / f"{sym.lstrip('^')}.csv")
