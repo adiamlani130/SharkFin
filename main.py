@@ -11,7 +11,7 @@ from pathlib import Path
 
 import streamlit as st
 
-st.set_page_config(page_title="SharkFin", page_icon=str(Path(__file__).with_name("sharkfin_logo.png")), layout="wide", initial_sidebar_state="auto")
+st.set_page_config(page_title="SharkFin", page_icon=str(Path(__file__).with_name("sharkfin_icon.png")), layout="wide", initial_sidebar_state="auto")
 
 
 def reload_changed_sharkfin():
@@ -37,9 +37,10 @@ from sharkfin import ui  # noqa: E402  (after set_page_config)
 
 ui.setup()
 
-logo = Path(__file__).with_name("sharkfin_logo.png")
-if logo.exists():
-    st.logo(str(logo), size="large")
+here = Path(__file__).parent
+wordmark, icon = here / "sharkfin_wordmark.png", here / "sharkfin_icon.png"
+if wordmark.exists():
+    st.logo(str(wordmark), size="large", icon_image=str(icon) if icon.exists() else None)
 
 pages = {
     "": [
@@ -57,6 +58,9 @@ pages = {
     "Strategies": [
         st.Page("app_pages/playbook.py", title="Strategy Playbook"),
         st.Page("app_pages/strategy_lab.py", title="Strategy Lab"),
+    ],
+    "Ideas": [
+        st.Page("app_pages/speculation.py", title="Speculation Radar"),
     ],
     "You": [
         st.Page("app_pages/portfolio.py", title="Portfolio"),

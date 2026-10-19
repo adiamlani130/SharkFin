@@ -9,7 +9,7 @@ from sharkfin import data
 from tests import fakes
 
 ROOT = Path(__file__).resolve().parents[1]
-PAGES = ["home", "research", "predictions", "scanner", "portfolio", "strategy_lab", "news", "playbook"]
+PAGES = ["home", "research", "predictions", "scanner", "portfolio", "strategy_lab", "news", "playbook", "speculation"]
 
 RUNNER = """
 import runpy, streamlit as st

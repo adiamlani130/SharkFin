@@ -4,18 +4,288 @@
 <meta charset="utf-8">
 <style>
   html, body {margin: 0; height: 100%; overflow: hidden; background: #040b13;}
-  canvas {display: block; width: 100%; height: 100%;}
+  canvas {display: block; position: fixed; inset: 0; width: 100%; height: 100%;}
+  #sea {display: none;}
+  #gl {opacity: 0; transition: opacity 1.6s ease;}
+  #gl.on {opacity: 1;}
 </style>
 </head>
 <body>
+<canvas id="gl" aria-hidden="true"></canvas>
 <canvas id="sea" aria-hidden="true"></canvas>
+<script id="vs" type="x-shader/x-vertex">
+attribute vec2 a;
+void main() { gl_Position = vec4(a, 0.0, 1.0); }
+</script>
+<script id="fs" type="x-shader/x-fragment">
+/* The SharkFin sea at dusk, ray-traced per pixel: a physically paced wave field (deep-water dispersion), a
+   sky with a low sun, clouds and stars, Fresnel reflection, light scattering through the crests, a sun glitter
+   path, haze toward the horizon, and dorsal fins cutting across with foam and a V-shaped wake. */
+precision highp float;
+uniform vec2 R;          // canvas size in pixels
+uniform float T;         // seconds
+uniform float MOTION;    // 0 = reduced motion (still camera)
+
+const float PI = 3.14159265;
+const int NW = 22;                 // waves in the full field (normals)
+const int NH = 9;                  // waves used while finding the surface
+const vec3 SUN_COL = vec3(1.0, 0.56, 0.28);
+vec3 SUN;                          // set in main
+
+float hash(float n) { return fract(sin(n) * 43758.5453123); }
+float hash2(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash2(i), hash2(i + vec2(1, 0)), u.x), mix(hash2(i + vec2(0, 1)), hash2(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float s = 0.0, a = 0.5;
+  for (int i = 0; i < 5; i++) { s += a * noise(p); p = mat2(1.6, 1.2, -1.2, 1.6) * p; a *= 0.5; }
+  return s;
+}
+
+// Sum of directional waves with sharpened crests. Each wave follows deep-water dispersion (w = sqrt(g k)),
+// so long swells travel faster than short chop, as at sea. ``fp`` is the pixel footprint in metres: waves
+// shorter than it fade out instead of shimmering.
+float waves(vec2 p, float t, int n, float fp, out vec2 g) {
+  float h = 0.0;
+  g = vec2(0.0);
+  float lam = 34.0;
+  for (int i = 0; i < NW; i++) {
+    if (i >= n) break;
+    float fi = float(i);
+    float ang = 0.55 + (hash(fi * 1.7 + 0.3) - 0.5) * 2.2;
+    vec2 d = vec2(cos(ang), sin(ang));
+    float k = 2.0 * PI / lam;
+    float w = sqrt(9.81 * k);
+    float A = lam * 0.0105 * clamp(lam / (fp * 6.0) - 0.5, 0.0, 1.0);
+    float ph = dot(d, p) * k - w * t + hash(fi + 11.0) * 6.2831;
+    float e = exp(sin(ph) - 1.0);
+    h += A * e;
+    g += A * e * cos(ph) * k * d;
+    lam *= 0.79;
+  }
+  return h;
+}
+float height(vec2 p, float t) { vec2 g; return waves(p, t, NH, 0.0, g); }
+
+vec3 sky(vec3 rd, float t) {
+  float el = max(rd.y, 0.0);
+  float sd = max(dot(rd, SUN), 0.0);
+  vec2 az = normalize(vec2(rd.x, rd.z) + 1e-5), saz = normalize(SUN.xz);
+  float toward = pow(max(dot(az, saz), 0.0), 3.0);
+  vec3 zenith = vec3(0.012, 0.028, 0.068);
+  vec3 mid = vec3(0.05, 0.11, 0.20);
+  vec3 low = mix(vec3(0.16, 0.22, 0.30), vec3(0.62, 0.38, 0.24), toward);
+  vec3 c = mix(low, mid, smoothstep(0.0, 0.10, el));
+  c = mix(c, zenith, smoothstep(0.08, 0.55, el));
+  c += SUN_COL * (0.08 * pow(sd, 6.0) + 0.35 * pow(sd, 48.0) + 0.9 * pow(sd, 600.0));
+  c += vec3(1.0, 0.66, 0.38) * 7.0 * smoothstep(0.99992, 0.99996, sd);
+  // clouds: a thin deck lit warm toward the sun, dark away from it
+  if (rd.y > 0.0) {
+    vec2 cp = rd.xz / (rd.y + 0.06) * 0.9 + vec2(T * 0.006, 0.0);
+    float cl = fbm(cp * 1.3 + 3.0);
+    float cov = smoothstep(0.48, 0.82, cl) * smoothstep(0.005, 0.12, rd.y) * (1.0 - smoothstep(0.35, 0.7, rd.y));
+    vec3 cc = mix(vec3(0.05, 0.07, 0.10), vec3(0.85, 0.48, 0.30), pow(sd, 5.0) * 0.9 + toward * 0.25 * (1.0 - el * 3.0));
+    c = mix(c, cc, cov * 0.85);
+    // stars, high up and only where the sky is dark
+    vec2 sp = rd.xz / (rd.y + 0.4) * 420.0;
+    vec2 cell = floor(sp);
+    float st = hash2(cell);
+    vec2 off = vec2(hash2(cell + 3.1), hash2(cell + 7.7)) - 0.5;
+    float dot_ = smoothstep(0.32, 0.0, length(fract(sp) - 0.5 - off * 0.5));
+    float tw = 0.6 + 0.4 * sin(t * (1.0 + st * 3.0) + st * 40.0);
+    c += vec3(0.8, 0.88, 1.0) * step(0.996, st) * dot_ * smoothstep(0.2, 0.55, el) * (1.0 - cov) * tw * 0.8;
+  }
+  return c;
+}
+
+// --- dorsal fins -----------------------------------------------------------------------------------------
+// Each fin swims along a gently curving lane, rises and dives now and then, and rides the swell.
+void finPath(int i, float t, out vec2 c, out vec2 dir, out float size) {
+  float fi = float(i);
+  float speed = 1.5 + 0.45 * fi;
+  float z = 9.0 + 8.0 * fi;
+  float span = 2.0 * (z * 1.1 + 6.0);                       // just wider than the view at that distance
+  float sgn = i == 1 ? -1.0 : 1.0;
+  float s = mod(t * speed + fi * 41.0 + 30.0, span);
+  float x = sgn * (s - span * 0.5);
+  float wob = 2.2 * sin(t * 0.21 + fi * 2.0);
+  c = vec2(x, z + wob);
+  dir = normalize(vec2(sgn * speed, 2.2 * 0.21 * cos(t * 0.21 + fi * 2.0)));
+  float edges = smoothstep(0.0, 4.0, s) * smoothstep(span, span - 4.0, s);
+  float dive = smoothstep(-0.75, -0.35, sin(t * 0.055 + fi * 2.4));
+  size = edges * dive;
+}
+
+// Fin outline in its own plane: u along the swim direction (metres, + = forward), y = 0..1 up the fin.
+// A curved leading edge sweeping back to the tip and a hollowed trailing edge, like the SharkFin logo.
+vec2 finEdges(float y, float w) {
+  float lead = w * (0.52 - 0.98 * pow(y, 1.55));
+  float trail = w * (-0.50 + 0.04 * y + 0.24 * sin(PI * pow(y, 0.9)));
+  return vec2(lead, trail);
+}
+
+// Nearest fin hit along the ray: x = distance, y = coverage (edge antialiasing), z = fin index, w = height 0..1
+vec4 traceFins(vec3 ro, vec3 rd, float t, float pix, out vec3 nrm, out float uu) {
+  vec4 best = vec4(1e9, 0.0, -1.0, 0.0);
+  nrm = vec3(0.0); uu = 0.0;
+  for (int i = 0; i < 3; i++) {
+    vec2 c, d; float size;
+    finPath(i, t, c, d, size);
+    if (size < 0.02) continue;
+    float H = 0.95 * size, W = 0.95;
+    float base = height(c, t) - 0.12;
+    vec3 n = vec3(-d.y, 0.0, d.x);
+    float den = dot(rd, n);
+    if (abs(den) < 1e-4) continue;
+    float tp = dot(vec3(c.x, base, c.y) - ro, n) / den;
+    if (tp <= 0.0 || tp > best.x) continue;
+    vec3 hp = ro + rd * tp;
+    float u = dot(hp.xz - c, d);
+    float y = (hp.y - base) / H;
+    if (y < 0.0 || y > 1.0) continue;
+    vec2 e = finEdges(y, W);
+    float px = pix * tp;                                     // one pixel in metres at this distance
+    float cov = clamp(min(e.x - u, u - e.y) / px + 0.5, 0.0, 1.0) * clamp((1.0 - y) * H / px + 0.5, 0.0, 1.0);
+    if (cov <= 0.0) continue;
+    if (hp.y < height(hp.xz, t)) continue;                  // under the water line
+    best = vec4(tp, cov, float(i), y);
+    nrm = n * -sign(den);
+    uu = (u - e.y) / max(e.x - e.y, 1e-3);                   // 0 at the trailing edge, 1 at the leading edge
+  }
+  return best;
+}
+
+// Foam churned up by the fins: a splash at the fin, a turbulent trail and the two arms of a Kelvin wake.
+float wakeFoam(vec2 p, float t) {
+  float f = 0.0;
+  for (int i = 0; i < 3; i++) {
+    vec2 c, d; float size;
+    finPath(i, t, c, d, size);
+    if (size < 0.02) continue;
+    vec2 q = p - c;
+    float u = dot(q, d), w = dot(q, vec2(-d.y, d.x));
+    float back = max(-u, 0.0);
+    float splash = exp(-(u * u * 2.2 + w * w * 9.0)) * step(-1.2, u);
+    float trail = exp(-w * w / (0.02 + 0.01 * back)) * exp(-back / 4.0) * step(u, 0.4);
+    float arm = abs(abs(w) - 0.354 * back);                  // Kelvin angle: tan(19.5 deg)
+    float vee = exp(-arm * arm / (0.006 + 0.002 * back)) * exp(-back / 5.0) * smoothstep(0.0, 1.0, back);
+    float tex = smoothstep(0.25, 0.85, noise(q * 4.0 + vec2(t * 1.3, 0.0)) * 0.6 + noise(q * 11.0 - t) * 0.4);
+    f += size * tex * (1.2 * splash + 0.55 * trail + 0.35 * vee);
+  }
+  return clamp(f, 0.0, 1.0);
+}
+
+vec3 aces(vec3 x) { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+
+void main() {
+  vec2 p = (gl_FragCoord.xy - 0.5 * R) / R.y * 2.0;          // y from -1 (bottom) to 1 (top)
+  float t = T;
+  float sunAz = R.x / R.y < 1.0 ? 0.16 : 0.30;
+  SUN = normalize(vec3(sin(sunAz), 0.042, cos(sunAz)));
+
+  // camera: a few metres above the water on a slow swell; looking up a touch puts the horizon low
+  float bob = MOTION * (0.10 * sin(t * 0.52) + 0.05 * sin(t * 0.93 + 1.0));
+  vec3 ro = vec3(0.0, 3.1 + bob, 0.0);
+  float pitch = (R.x / R.y < 1.0 ? 0.10 : 0.175) + MOTION * 0.006 * sin(t * 0.41);
+  float roll = MOTION * 0.006 * sin(t * 0.37 + 0.6);
+  float f = 1.65;
+  vec3 fw = normalize(vec3(0.0, sin(pitch), cos(pitch)));
+  vec3 rt = normalize(cross(vec3(sin(roll), cos(roll), 0.0), fw));
+  vec3 up = cross(fw, rt);
+  vec3 rd = normalize(p.x * rt + p.y * up + f * fw);
+  float pix = 2.0 / R.y / f;                                // radians per pixel
+
+  vec3 col;
+  float tw = 1e9;
+  vec3 wp = vec3(0.0);
+  if (rd.y < 0.0) {
+    // find the surface between the highest and lowest the waves can reach
+    float hiY = 1.9, loY = 0.0;
+    float ta = (ro.y - hiY) / -rd.y, tb = min((ro.y - loY) / -rd.y, 4000.0);
+    float fa = ro.y + rd.y * ta - height(ro.xz + rd.xz * ta, t);
+    float fb = ro.y + rd.y * tb - height(ro.xz + rd.xz * tb, t);
+    for (int i = 0; i < 9; i++) {                          // secant steps, bracketed
+      float tm = mix(ta, tb, fa / (fa - fb));
+      float fm = ro.y + rd.y * tm - height(ro.xz + rd.xz * tm, t);
+      if (fm > 0.0) { ta = tm; fa = fm; } else { tb = tm; fb = fm; }
+    }
+    tw = mix(ta, tb, fa / (fa - fb));
+    wp = ro + rd * tw;
+  }
+
+  vec3 fn; float fu;
+  vec4 fin = traceFins(ro, rd, t, pix, fn, fu);
+
+  vec3 horizonCol = sky(normalize(vec3(rd.x, 0.0, rd.z)), t);
+  if (rd.y >= 0.0) {
+    col = sky(rd, t);
+  } else {
+    vec2 g;
+    float fp = tw * pix * 1.5 + 0.02;
+    float h = waves(wp.xz, t, NW, fp, g);
+    vec3 n = normalize(vec3(-g.x, 1.0, -g.y));
+    float dist = smoothstep(80.0, 1500.0, tw);
+    n = normalize(mix(n, vec3(0.0, 1.0, 0.0), dist * 0.6));
+    vec3 rf = reflect(rd, n);
+    rf.y = abs(rf.y);
+    float cosi = max(dot(n, -rd), 0.0);
+    float fres = 0.02 + 0.98 * pow(1.0 - cosi, 5.0);
+    vec3 refl = sky(rf, t);
+    // light that enters a wave and scatters back out, strongest on crests lit from behind by the low sun
+    vec3 deep = vec3(0.004, 0.022, 0.040);
+    float crest = clamp((h - 0.55) * 0.9, 0.0, 1.0);
+    float back = pow(max(dot(normalize(vec3(-rd.x, 0.0, -rd.z)), -normalize(vec3(SUN.x, 0.0, SUN.z))), 0.0), 2.0);
+    vec3 sss = vec3(0.02, 0.13, 0.12) * crest * (0.35 + 0.9 * back) + vec3(0.03, 0.06, 0.08) * 0.25 * max(n.y, 0.0);
+    vec3 water = deep + sss;
+    col = mix(water, refl, fres);
+    // sun glitter: sharp up close, broad toward the horizon
+    float shin = mix(700.0, 70.0, dist);
+    float sp = pow(max(dot(rf, SUN), 0.0), shin) * (shin * 0.012 + 1.0);
+    col += SUN_COL * sp * 1.3 * (1.0 - fres * 0.3);
+    // whitecaps on the steepest crests, plus the fins' wake
+    float steep = length(g);
+    float cap = smoothstep(0.62, 0.95, steep) * smoothstep(1.05, 1.5, h) * (1.0 - dist);
+    float foam = max(cap * (0.4 + 0.6 * noise(wp.xz * 2.0 + t * 0.4)), wakeFoam(wp.xz, t) * (1.0 - dist));
+    vec3 foamCol = vec3(0.55, 0.62, 0.68) * (0.55 + 0.45 * max(n.y, 0.0)) + SUN_COL * 0.18 * back;
+    col = mix(col, foamCol, foam * 0.8);
+    // haze: far water melts into the horizon
+    col = mix(col, horizonCol, 1.0 - exp(-tw * 0.0016));
+  }
+
+  // fins over the water (or behind a nearer crest)
+  if (fin.z >= 0.0 && fin.x < tw) {
+    vec3 hp = ro + rd * fin.x;
+    float bend = (fu - 0.5) * 0.9;                           // fins are rounded, not flat plates
+    vec2 c, d; float s; finPath(int(fin.z), t, c, d, s);
+    vec3 nn = normalize(fn + vec3(d.x, 0.0, d.y) * bend);
+    float dif = max(dot(nn, SUN), 0.0);
+    vec3 base = vec3(0.045, 0.06, 0.075);
+    vec3 fc = base * (0.35 + 0.65 * fin.w) + base * 2.6 * dif * SUN_COL;
+    fc += sky(reflect(rd, nn), t) * 0.09;                    // wet skin reflects the sky
+    fc += SUN_COL * pow(max(dot(reflect(rd, nn), SUN), 0.0), 60.0) * 0.6;
+    fc += SUN_COL * 0.25 * smoothstep(0.82, 1.0, fu) * smoothstep(0.1, 0.9, fin.w) * max(dot(vec3(d.x, 0.0, d.y), SUN), 0.0);
+    fc = mix(fc, vec3(0.5, 0.58, 0.64), smoothstep(0.08, 0.0, fin.w) * 0.6);   // splash at the water line
+    fc = mix(fc, horizonCol, 1.0 - exp(-fin.x * 0.0016));
+    col = mix(col, fc, fin.y);
+  }
+
+  // grade: filmic curve, a darker upper-left where the headline sits, a soft vignette
+  col *= 1.25;
+  col = aces(col);
+  vec2 q = gl_FragCoord.xy / R;
+  col *= mix(0.62, 1.0, smoothstep(0.0, 0.75, q.x + (1.0 - q.y) * 0.25));
+  col *= 0.78 + 0.22 * smoothstep(1.25, 0.35, length((q - 0.5) * vec2(1.0, 1.2)));
+  col = pow(col, vec3(0.92));
+  col += (hash2(gl_FragCoord.xy + fract(t)) - 0.5) / 255.0;  // dither: no banding in the sky gradient
+  gl_FragColor = vec4(col, 1.0);
+}
+</script>
 <script>
-/* The SharkFin landing sea: swell lines drawn far to near, each one filling the water below it so nearer
-   swells hide the ones behind, with a moon glint and a fin that crosses now and then.
-   Kept light: the still sky is painted once per resize, each swell only fills the strip down to the next one,
-   glints are batched into a few strokes, and it redraws at 30 frames a second at most. */
-(() => {
-  const cv = document.getElementById("sea");
+// The earlier hand-drawn sea, kept for browsers without WebGL.
+function legacySea(cv) {
   const ctx = cv.getContext("2d");
   const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
   let W = 0, H = 0, dpr = 1, sky = null;
@@ -220,6 +490,77 @@
     requestAnimationFrame(loop);
   };
   requestAnimationFrame(loop);
+}
+
+(() => {
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const cv = document.getElementById("gl");
+  const fallback = () => {
+    cv.style.display = "none";
+    const sea = document.getElementById("sea");
+    sea.style.display = "block";
+    legacySea(sea);
+  };
+  const gl = cv.getContext("webgl", {antialias: false, alpha: false, depth: false, powerPreference: "high-performance",
+                                    preserveDrawingBuffer: false});
+  if (!gl) return fallback();
+  const sh = (type, id) => {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, document.getElementById(id).textContent);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) { console.warn(gl.getShaderInfoLog(s)); return null; }
+    return s;
+  };
+  const vs = sh(gl.VERTEX_SHADER, "vs"), fs = sh(gl.FRAGMENT_SHADER, "fs");
+  if (!vs || !fs) return fallback();
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return fallback();
+  gl.useProgram(prog);
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "a");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const uR = gl.getUniformLocation(prog, "R"), uT = gl.getUniformLocation(prog, "T"),
+        uM = gl.getUniformLocation(prog, "MOTION");
+
+  // Render below screen resolution and let the browser scale up: water is soft, and this keeps laptops cool.
+  // The scale adapts to how long frames actually take.
+  let scale = Math.min(window.devicePixelRatio || 1, 1.5) * (window.innerWidth > 1600 ? 0.6 : 0.75);
+  const MIN_SCALE = 0.35, MAX_SCALE = Math.min(window.devicePixelRatio || 1, 1.5);
+  function resize() {
+    cv.width = Math.max(2, Math.round(window.innerWidth * scale));
+    cv.height = Math.max(2, Math.round(window.innerHeight * scale));
+    gl.viewport(0, 0, cv.width, cv.height);
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  const t0 = performance.now();
+  const START = Number(new URLSearchParams(location.search).get("t")) || 26;  // seconds in: a fin is already crossing
+  let frames = 0, acc = 0, last = performance.now(), shown = false;
+  function frame(now) {
+    const t = still ? START : START + (now - t0) / 1000;
+    gl.uniform2f(uR, cv.width, cv.height);
+    gl.uniform1f(uT, t);
+    gl.uniform1f(uM, still ? 0 : 1);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    if (!shown) { shown = true; requestAnimationFrame(() => cv.classList.add("on")); }
+    if (still) return;
+    const dt = now - last; last = now;
+    if (dt < 250) { acc += dt; frames++; }
+    if (frames === 40) {                                  // re-balance quality every 40 frames
+      const avg = acc / frames;
+      if (avg > 26 && scale > MIN_SCALE) { scale = Math.max(MIN_SCALE, scale * 0.82); resize(); }
+      else if (avg < 13 && scale < MAX_SCALE) { scale = Math.min(MAX_SCALE, scale * 1.1); resize(); }
+      frames = 0; acc = 0;
+    }
+    requestAnimationFrame(frame);
+  }
+  cv.addEventListener("webglcontextlost", (e) => { e.preventDefault(); fallback(); });
+  requestAnimationFrame(frame);
 })();
 </script>
 </body>
