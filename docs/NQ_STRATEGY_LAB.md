@@ -125,4 +125,95 @@ regime and $5 strike magnet strategies) did poorly out of sample.
 python -m sharkfin.nq_lab fetch DATA_DIR                # Yahoo daily + Alpaca 5-minute bars
 # save https://squeezemetrics.com/monitor/static/DIX.csv as DATA_DIR/DIX.csv
 python -m sharkfin.nq_lab DATA_DIR OUT_DIR              # writes results.csv and returns.csv
+python -m sharkfin.nq_regimes DATA_DIR OUT_DIR          # routers, gates and level maps (part 2)
 ```
+
+# Part 2: GEX and VIX as a daily playbook
+
+**Bottom line.** Using VIX and GEX to choose today's strategy, or to decide whether to trade at all, did not
+beat simply running the strategies. The routers and gates mostly sat out good days. One rule worked out of
+sample: **buy NQ at the open and sell at 15:55 only after a fearful close**, meaning VIX high and GEX low. It
+earned a 0.83 Sharpe and +7.7% a year over cash, in the market 9% of the time, with a -9% worst drop.
+Code: `sharkfin/nq_regimes.py`. Tables: `docs/nq_lab/regime_results.csv` and `docs/nq_lab/levels_*.csv`.
+
+## What was tested
+
+- **Regime cells**, from what is known before the decision:
+  - VIX bands: under 15, 15-20, 20-25, 25-30 and 30+.
+  - GEX rank against the past year, in fifths.
+  - VIX/VIX3M curve bands.
+  - VIX band × GEX third.
+  - GEX third × curve.
+  - VIX rising or falling × GEX third.
+- **Router:** each morning (day trades) or close (swing), it looks up today's cell. It runs the candidate that
+  earned the most in that cell on past days only, or sits out if nothing cleared a confidence bar. It re-learns
+  monthly from finished days, and walk-forward picks its scheme, bar and memory length each year.
+  - 11 day-trade candidates: long or short open-to-close, two opening-range versions, gap and go, gap fade,
+    last-30-minute momentum, VWAP trend, Bollinger fade, and prior-day level fade and break.
+  - 7 swing candidates: long, short, IBS, RSI(2), EMA trend, Donchian and VIX-spike buy.
+- **Gates:** one strategy, traded only in cells where it has made money before.
+- **Fixed regime rules**, with thresholds picked walk-forward: fear-day long (day), fear bounce (swing), and a
+  regime-sized long.
+
+## Results (unseen test years; swing May 2015 to Oct 2026, day trades Apr 2019 to Oct 2026)
+
+| Strategy | Sharpe | Return over cash / yr | Worst drop | Time in market | Same strategy without the regime |
+| --- | --- | --- | --- | --- | --- |
+| Fear day long (day) | 0.83 | +7.7% | -9% | 9% | Long open to close: 0.14 |
+| Swing gate: IBS reversion | 0.83 | +10.7% | -18% | 33% | IBS reversion: 0.97 |
+| Regime-sized long | 0.76 | +20.0% | -39% | 100% | Buy and hold: 0.80 |
+| Swing gate: Long NQ | 0.59 | +10.5% | -28% | 79% | Buy and hold: 0.80 |
+| Swing router | 0.54 | +8.8% | -28% | 72% | Best fixed swing strategy: 0.97 |
+| Day gate: last-30-min momentum | 0.47 | +2.0% | -8% | 3% | Ungated: 0.41 |
+| Fear bounce (swing) | 0.43 | +6.1% | -23% | 16% | Buy and hold: 0.80 |
+| Day gate: gap and go | 0.15 | +0.5% | -5% | 14% | Ungated: 0.26 |
+| Day router | -0.05 | -0.5% | -19% | 49% | |
+| Day gate: ORB 30 min | -0.09 | -0.4% | -8% | 23% | |
+
+The routers didn't settle on a scheme. The day router used VIX, GEX × curve, VIX × GEX and VIX-move in
+different years, and its favourite pick was "no trade" (29% of days). Cells hold a few hundred days at most, so
+the "best strategy in this cell" mostly changes with noise.
+
+## Fear day long, checked
+
+- **Rule:** after a close with VIX at or over 20 to 30 and GEX in its lowest 20 to 50% of the year, buy the
+  09:35 open and sell at 15:55.
+- **By year (over cash):**
+  - 2020: +21.7% on 45 trades
+  - 2021: +4.2% on 4 trades
+  - 2022: +8.8% on 42 trades
+  - 2025: +12.5% on 36 trades
+  - 2026 so far: +9.5% on 37 trades
+  - 2019, 2023 and 2024 had almost no fear days. It is not a 2020-only effect.
+- **Fixed thresholds, 2017 to 2026:** every combination tried was positive, with Sharpes of 0.25 to 0.70.
+  Adding "GEX low" beat "any GEX" at every VIX level. For example, at VIX 25 or more it was 0.45 with GEX in its
+  bottom 20% against 0.25 with any GEX.
+- **Caution:** it trades only about 40 days in a fearful year, so most years it does nothing.
+
+## What each level meant (whole-sample description, not a tested trade)
+
+Average NQ open-to-close return the next session, in basis points, with the number of days in brackets. The
+history is split in two halves to see whether the pattern held:
+
+| Cell (VIX at prior close, GEX rank) | 2016 to mid-2019 | Mid-2019 to 2026 |
+| --- | --- | --- |
+| VIX under 17, low GEX | +9.1 (90) | -7.5 (39) |
+| VIX under 17, mid GEX | -4.5 (241) | -7.1 (193) |
+| VIX under 17, high GEX | +0.4 (343) | -4.1 (489) |
+| VIX 17-24, low GEX | -12.4 (117) | +1.8 (231) |
+| VIX 17-24, mid GEX | +0.3 (33) | +9.4 (252) |
+| VIX 17-24, high GEX | +2.8 (6) | -1.1 (218) |
+| VIX 24+, low GEX | **+19.6 (40)** | **+16.8 (247)** |
+| VIX 24+, mid GEX | none | +0.3 (98) |
+| VIX 24+, high GEX | none | -17.8 (60) |
+
+- **High VIX with low GEX** is the only cell that was strongly positive in both halves. It also had the widest
+  days: a 2.9% average range against 0.9% for calm, high-gamma days.
+- **Calm days** (VIX under 17) drifted slightly down during the session. NQ's gains on those days came
+  overnight.
+- **Day strategies by cell:**
+  - Breakouts (prior-day level break, opening range) did best with VIX 17-24 and low GEX: +6 to +7 bp a day.
+  - VWAP trend lost most on high-GEX days.
+  - Shorting open-to-close only paid with VIX 24+ and high GEX (+14 bp, but only 60 days).
+- **VIX/VIX3M above 1** (curve inverted) was the best curve band for buying the open (+18 bp) and for IBS and
+  RSI(2) dips the next day.

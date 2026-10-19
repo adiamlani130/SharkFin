@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sharkfin import nq_lab, walkforward
+from sharkfin import nq_lab, nq_regimes, walkforward
 
 
 def _market(n_days=700, seed=0):
@@ -38,7 +38,7 @@ def _settings(st):
     return [pts[0], pts[len(pts) // 2], pts[-1]] if len(pts) > 2 else pts
 
 
-@pytest.mark.parametrize("st", nq_lab.CATALOGUE, ids=lambda s: s.name)
+@pytest.mark.parametrize("st", nq_lab.CATALOGUE + nq_regimes.catalogue(), ids=lambda s: s.name)
 def test_cutting_off_the_future_changes_no_past_result(st):
     d = _market()
     start = d["px"].index[300]
@@ -124,3 +124,26 @@ def test_swing_decisions_fill_at_the_next_open():
     px, i = d["px"], 11
     assert r.iloc[10] == pytest.approx(d["rf"].iloc[10])  # nothing held on the decision day
     assert r.iloc[i] == pytest.approx(px["c"].iloc[i] / px["o"].iloc[i] - 1 - 2 * 0 - nq_lab.COST, rel=1e-9)
+
+
+def test_router_only_learns_from_finished_days():
+    """A candidate that wins in a cell only after day i must not be picked for that cell before day i."""
+    n = 200
+    rets = np.zeros((n, 2))
+    rets[:, 0] = 0.001
+    rets[120:, 1] = 0.01  # candidate 1 starts winning on row 120
+    cells = np.zeros(n)
+    choice = nq_regimes.route(rets, cells, cells, window=0, min_t=0.0)
+    assert (choice[:121] != 1).all()  # row 120's own result is not known when row 120 is decided
+
+
+def test_swing_router_never_uses_the_return_it_is_deciding_on():
+    d = _market()
+    p = {"scheme": "vix", "min_t": 0.0, "window": 0}
+    a = nq_regimes.swing_router.signal(d, p)
+    e = dict(d)
+    e["px"] = d["px"].copy()
+    e.pop("_swing_matrix", None)
+    e["px"].iloc[-1, :4] *= 1.5  # the last day: its decision may use it, earlier ones may not
+    b = nq_regimes.swing_router.signal(e, p)
+    pd.testing.assert_series_equal(a.iloc[:-1], b.iloc[:-1])

@@ -835,7 +835,9 @@ def run_one(st: Strategy, d: dict, t0=None, warmup: int = GEX_LOOKBACK) -> dict:
     days = d["ic"].index.intersection(d["px"].index) if st.kind == "day" else d["px"].index
     days = days[days >= (t0 if t0 is not None else first_usable(d, st.needs))]
     fl = wf.folds(days, first=warmup if st.kind == "swing" else 60, purge=1)
-    return wf.run(st.evaluate, d, st.points, fl, d["rf"])
+    res = wf.run(st.evaluate, d, st.points, fl, d["rf"])
+    res["fold_list"] = fl
+    return res
 
 
 def _folds_beating_cash(res: dict, rf: pd.Series) -> float:
