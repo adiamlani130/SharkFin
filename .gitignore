@@ -230,3 +230,4 @@ portfolio.json
 watchlist.json
 .env
 .claude/settings.local.json
+.lab/

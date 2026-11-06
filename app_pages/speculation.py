@@ -126,10 +126,9 @@ for t in ranked:
     nums = (f"<div class='nums'><span>6 mo <b class='{updown(row['6m'])}'>{pct(row['6m'])}</b></span>"
             f"<span>12 mo <b class='{updown(row['12m'])}'>{pct(row['12m'])}</b></span>"
             f"<span>vs 200-day <b>{pct(row['vs200'])}</b></span></div>") if row is not None else ""
-    yours = "<span class='sf-pill sf-info'>From your book</span>" if t.from_you else ""
     tickers = " ".join(f"<code>{ui.h(p.ticker)}</code>" for p in t.plays)
     cards.append(f"<div class='sf-theme' style='--c:{STAGE_COLOR.get(stg, ui.MUTED)}'>"
-                 f"<div class='top'>{stage_pill(stg) if stg else ''}{yours}<span class='hz'>{ui.h(t.horizon)}</span></div>"
+                 f"<div class='top'>{stage_pill(stg) if stg else ''}<span class='hz'>{ui.h(t.horizon)}</span></div>"
                  f"<div class='nm'>{ui.h(t.name)}</div><div class='tg'>{ui.h(t.tagline)}</div>{nums}"
                  f"<div class='tk'>{tickers}</div></div>")
 st.markdown(f"<div class='sf-themes'>{''.join(cards)}</div>", unsafe_allow_html=True)

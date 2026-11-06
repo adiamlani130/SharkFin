@@ -47,7 +47,6 @@ class Theme:
     horizon: str
     plays: list
     sources: list = field(default_factory=list)
-    from_you: bool = False   # one of the themes from Adi's long-term book
 
 
 THEMES: list[Theme] = [
@@ -82,12 +81,11 @@ THEMES: list[Theme] = [
         ["Already a crowded trade after a big 2025-26 run", "Natural gas prices", "Grid build-outs catching up by 2028-29"],
         "Now-18 months",
         [Play("GEV", "GE Vernova", CORE, "Gas turbines and grid gear, sold out for years."),
-         Play("NVT", "nVent", CORE, "Power distribution and liquid cooling for racks (from your book)."),
+         Play("NVT", "nVent", CORE, "Power distribution and liquid cooling for racks."),
          Play("BE", "Bloom Energy", SPEC, "Fuel cells that power a data center in weeks; Brookfield's $25B partner."),
          Play("FLNC", "Fluence Energy", SPEC, "Grid batteries that let sites run harder on a capped hookup.")],
         ["https://www.microgridknowledge.com/generation-fuels/news/55388215/brookfield-quintupling-capitalization-of-bloom-energy-fuel-cells-for-ai-to-25b",
-         "https://www.insidermonkey.com/blog/ai-fueled-demand-signals-a-bigger-opportunity-for-bloom-energy-be-investors-1805579/"],
-        from_you=True),
+         "https://www.insidermonkey.com/blog/ai-fueled-demand-signals-a-bigger-opportunity-for-bloom-energy-be-investors-1805579/"]),
     Theme(
         "nuclear", "Nuclear fuel and small reactors",
         "Every new reactor design needs a fuel only one US company can make today.",
@@ -100,13 +98,12 @@ THEMES: list[Theme] = [
         ["First reactors are 2027-30 at best; delays are the norm", "Share sales to fund construction",
          "Very volatile: SMR stocks have halved and doubled within a year"],
         "1-4 years",
-        [Play("BWXT", "BWX Technologies", CORE, "Sole supplier of Navy reactors, building HALEU capacity (from your book)."),
+        [Play("BWXT", "BWX Technologies", CORE, "Sole supplier of Navy reactors, building HALEU capacity."),
          Play("LEU", "Centrus Energy", SPEC, "The only US-licensed HALEU producer."),
          Play("OKLO", "Oklo", MOON, "Aurora micro-reactors; no licensed reactor yet."),
          Play("SMR", "NuScale Power", MOON, "The one approved SMR design, still looking for its first firm buyer.")],
         ["https://www.cmcmarkets.com/en/optox/three-nuclear-stocks-that-could-ride-the-ai-power-crunch",
-         "https://www.marketbeat.com/instant-alerts/list-best-nuclear-stocks-to-watch-now-october-12th-2026-10-12/"],
-        from_you=True),
+         "https://www.marketbeat.com/instant-alerts/list-best-nuclear-stocks-to-watch-now-october-12th-2026-10-12/"]),
     Theme(
         "fusion", "Fusion's supply chain",
         "Own the superconducting tape every magnet-based fusion machine needs, not the long-shot reactors.",
@@ -115,7 +112,7 @@ THEMES: list[Theme] = [
         ["SPARC's magnets are being installed for first plasma in 2027.",
          "Commonwealth Fusion has raised about $3.9B; Google agreed to buy half of ARC's output.",
          "General Fusion listed on Nasdaq in July 2026 and hit a 1.1 keV milestone with UKAEA in October."],
-        ["SPARC first plasma, then a Q>1 result (roughly 20-30% odds in 2027 by your book's estimate)",
+        ["SPARC first plasma, then a Q>1 result (roughly 20-30% odds in 2027 by one estimate)",
          "More HTS tape orders from other fusion and grid-cable buyers"],
         ["Fusion timelines always slip", "Fujikura trades on AI fiber, not fusion",
          "General Fusion is likely to sell more stock"],
@@ -123,8 +120,7 @@ THEMES: list[Theme] = [
         [Play("5803.T", "Fujikura (Tokyo)", CORE, "HTS tape plus AI fiber; fusion is upside, not the whole bet."),
          Play("GFUZ", "General Fusion", MOON, "Magnetized-target fusion; first plant targeted around 2035.")],
         ["https://www.khaleejtimes.com/business/us-fusion-firm-orders-record-10000km-of-superconducting-tape-from-japans-fujikura",
-         "https://www.gov.uk/government/news/ukaea-general-fusion-announce-magnetised-target-fusion-milestone"],
-        from_you=True),
+         "https://www.gov.uk/government/news/ukaea-general-fusion-announce-magnetised-target-fusion-milestone"]),
     Theme(
         "packaging", "Advanced chip packaging and glass",
         "Chips are now built by stacking dies, and the packaging step, not the chip itself, is the choke point.",
@@ -166,15 +162,14 @@ THEMES: list[Theme] = [
          "IonQ guided 2026 revenue to $225-245M; D-Wave bookings jumped to $33M in Q1.",
          "Quantinuum's insider lockup ends around Dec 1, 2026, which usually weighs on price."],
         ["Logical-qubit milestones with low error rates", "Government and pharma contracts",
-         "Quantinuum after its lockup (your book's entry point)"],
+         "Quantinuum after its lockup"],
         ["Revenue is tiny next to valuations", "Constant share sales", "Breakthrough headlines that don't pan out"],
         "2-5 years",
-        [Play("QNT", "Quantinuum", SPEC, "The best-funded trapped-ion leader (from your book; wait for the lockup)."),
+        [Play("QNT", "Quantinuum", SPEC, "The best-funded trapped-ion leader (wait for the lockup)."),
          Play("IONQ", "IonQ", SPEC, "The first quantum pure play past $100M in revenue."),
          Play("RGTI", "Rigetti Computing", MOON, "Superconducting qubits; $569M cash, small revenue."),
          Play("QBTS", "D-Wave Quantum", MOON, "Annealing machines; bookings rising faster than revenue.")],
-        ["https://finance.yahoo.com/markets/article/honeywells-quantinuums-ipo-puts-the-quantum-stock-rally-to-the-test-154531114.html"],
-        from_you=True),
+        ["https://finance.yahoo.com/markets/article/honeywells-quantinuums-ipo-puts-the-quantum-stock-rally-to-the-test-154531114.html"]),
     Theme(
         "space", "Space: phones and data centers in orbit",
         "Satellites that talk straight to your phone, and the first serious plans to put AI compute in orbit.",
@@ -224,22 +219,22 @@ THEMES: list[Theme] = [
         "biotech", "AI-discovered drugs",
         "The first drugs designed with AI are reaching real trial readouts. A win re-rates the whole group.",
         "Clinical proof. Until AI-designed drugs beat old-style ones in trials, the group trades as a promise.",
-        ["Relay, AbCellera and Recursion all have readouts between late 2026 and 2027 (your book).",
+        ["Relay, AbCellera and Recursion all have readouts between late 2026 and 2027.",
          "Biotech held up during the Oct 14-15 AI selloff: XBI rose 2% while chips fell 5-14%.",
-         "The group barely moves with chips, so it diversifies an AI-heavy book."],
+         "The group barely moves with chips, so it diversifies an AI-heavy portfolio."],
         ["AbCellera's Oct 22 data", "Relay's next trial update", "Recursion's 2H 2027 readout"],
         ["Binary: one failed trial can halve a stock", "Recursion just sold $200M of stock"],
         "6-24 months",
         [Play("XBI", "Biotech ETF", CORE, "The calm way to own the theme."),
-         Play("RLAY", "Relay Therapeutics", SPEC, "Best trial setup of the AI-bio names in your book."),
+         Play("RLAY", "Relay Therapeutics", SPEC, "Best trial setup of the AI-bio names."),
          Play("ABCL", "AbCellera", SPEC, "Antibody discovery; data due Oct 22."),
          Play("RXRX", "Recursion", MOON, "Wait for its stock sale to settle (mid-November).")],
-        [], from_you=True),
+        []),
     Theme(
         "batteries", "Next-generation batteries",
         "Sodium-ion and solid-state cells could cut costs and fire risk for grid storage and cars.",
         "Cheap, safe grid storage for data centers and solar. Lithium supply is the old constraint.",
-        ["CATL is mass-producing sodium-ion cells and is your book's best diversifier (0.19 correlation with chips).",
+        ["CATL is mass-producing sodium-ion cells and is the theme's best diversifier (0.19 correlation with chips).",
          "QuantumScape launched its Eagle Line pilot production in 2026 and added Honda's R&D arm as a partner.",
          "Grid storage demand is rising with data-center power needs."],
         ["CATL's Q3 results on Oct 20", "QuantumScape shipping B-samples to customers"],
@@ -247,8 +242,7 @@ THEMES: list[Theme] = [
         "1-4 years",
         [Play("3750.HK", "CATL (Hong Kong)", CORE, "World's largest battery maker, leading on sodium-ion."),
          Play("QS", "QuantumScape", MOON, "Solid-state cells; years from real revenue.")],
-        ["https://www.fool.com/investing/2026/07/05/why-did-quantumscape-stock-drop-30-in-2026/"],
-        from_you=True),
+        ["https://www.fool.com/investing/2026/07/05/why-did-quantumscape-stock-drop-30-in-2026/"]),
 ]
 
 THEME_BY_KEY = {t.key: t for t in THEMES}

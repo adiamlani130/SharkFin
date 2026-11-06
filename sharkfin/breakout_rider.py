@@ -178,7 +178,7 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
 def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None = None, slots: int = SLOTS,
              cost_bps: float = COST_BPS, start=None, market_close: pd.Series | None = None,
              breakout_days: int = BREAKOUT_DAYS, adx_min: float = ADX_MIN, members: pd.DataFrame | None = None,
-             liquidate: bool = False) -> dict:
+             liquidate: bool = False, entry_ok: pd.Series | None = None) -> dict:
     """Replay Tech Breakout Rider on a panel of tech stocks {"Open"|"High"|"Low"|"Close": dates x tickers}.
     One fixed set of settings over the whole span is an in-sample test: use ``walk_forward`` for
     out-of-sample results."""
@@ -188,6 +188,8 @@ def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None =
     panel["Close"] = C
     q = walkforward.carry_forward(qqq_close.astype(float).reindex(dates.union(qqq_close.index))).reindex(dates)
     gate = qqq_gate(q).fillna(False).to_numpy(bool)
+    if entry_ok is not None:  # an extra filter on new trades (e.g. a VIX or GEX condition known at the close)
+        gate = gate & entry_ok.reindex(dates).fillna(False).to_numpy(bool)
     rf = swing_engine.daily_cash(dates, tbill_yields)
     t0 = STRENGTH_DAYS + 20
     if start is not None:

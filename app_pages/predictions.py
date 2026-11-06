@@ -1,26 +1,30 @@
-"""Probabilistic forecasts with walk-forward validation, volatility model and technical regime."""
+"""Forecasts: where a stock could be over a week to a year, and what is most likely to move it over that time.
+
+The range comes from five models tested on the stock's own past (walk-forward) and a volatility model with fat
+tails. The drivers change with the timeframe (``sharkfin.drivers``): news and the next report over days and weeks,
+estimates and earnings surprises over months, valuation and business quality over a year.
+"""
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import data, forecasting, ui
+from sharkfin import data, drivers, forecasting, sentiment, ui
 from sharkfin import indicators as ind
+from sharkfin import valuation
 from sharkfin.explain import tip
 
 ui.header("Forecasts",
-          "Five statistical and machine-learning models, each tested on this stock's past and weighted by how well it "
-          "actually forecast it. The cone shows the range of likely prices, from a volatility model with realistic fat tails.")
+          "Where a stock could be in a week, a month or a year, and what is most likely to move it over that time. "
+          "Short-term it's mostly news and earnings; long-term it's growth and what you pay for it.")
 
-c1, c2, c3 = st.columns([3, 5, 2], vertical_alignment="bottom")
+c1, c2 = st.columns([3, 6], vertical_alignment="bottom")
 with c1:
     sym = ui.symbol_picker("pred")
-horizon_lbl = c2.segmented_control("Horizon", ["1 week", "2 weeks", "1 month", "3 months"], default="1 month",
-                                 help=tip("horizon"))
-H = {"1 week": 5, "2 weeks": 10, "1 month": 21, "3 months": 63}[horizon_lbl or "1 month"]
-depth = c3.select_slider("Backtest depth", options=[6, 8, 12, 16], value=8,
-                         help=tip("backtest_depth"))
+horizon_lbl = c2.segmented_control("Timeframe", list(drivers.HORIZONS), default="3 months", help=tip("horizon"),
+                                   key="pred_h") or "3 months"
+H = drivers.HORIZONS[horizon_lbl]
 
 if not sym:
     st.stop()
@@ -35,9 +39,15 @@ def run_forecast(symbol: str, horizon: int, n_origins: int):
     return forecasting.ensemble_forecast(hist, symbol, horizon=horizon, n_origins=n_origins), hist
 
 
-with st.status(f"Fitting & backtesting 5 models on {sym}…", expanded=False) as status:
+with st.spinner(f"Loading {sym}…"):
+    ui.fetch_all([(data.info, (sym,)), (data.history, (sym, "10y")), (data.analyst_data, (sym,)),
+                  (data.earnings_history, (sym,)), (data.market_history, ("2y",)), (data.history, ("^VIX", "1y")),
+                  (data.news, (sym, sym))])
+    inf = data.info(sym) or {}
+
+with st.status(f"Testing 5 forecast models on {sym}'s past…", expanded=False) as status:
     try:
-        res, hist = run_forecast(sym, H, depth)
+        res, hist = run_forecast(sym, H, 8)
     except ValueError as e:
         status.update(label=str(e), state="error")
         st.stop()
@@ -51,18 +61,18 @@ last = res.last_price
 end = res.at(H)
 
 ui.metrics([
-    {"label": f"Expected in {horizon_lbl or '1 month'}", "value": f"${end['expected']:,.2f}",
+    {"label": f"Middle estimate in {horizon_lbl}", "value": f"${end['expected']:,.2f}",
      "delta": f"{ui.fmt_pct(end['exp_return'], 1, True)} from ${last:,.2f}", "help": tip("expected")},
     {"label": "Chance it ends higher", "value": ui.fmt_pct(end["prob_up"], 0), "help": tip("prob_up")},
-    {"label": "Likely range (80%)", "value": f"${end['low80']:,.0f} – ${end['high80']:,.0f}", "help": tip("range80")},
-    {"label": "Volatility", "value": f"{res.garch.current_vol:.0%}", "delta": f"normal {res.garch.long_run_vol:.0%}",
-     "delta_color": "off", "delta_arrow": "off",
-     "help": tip("garch") + f" Shocks fade with a half-life of about {res.garch.half_life:.0f} trading days."},
+    {"label": "Likely range (8 in 10)", "value": f"${end['low80']:,.0f} – ${end['high80']:,.0f}", "help": tip("range80")},
+    {"label": "How bumpy", "value": f"{res.garch.current_vol:.0%} a year",
+     "delta": f"normal for it {res.garch.long_run_vol:.0%}", "delta_color": "off", "delta_arrow": "off",
+     "help": "Expected volatility: how much the price typically swings in a year. " + tip("garch")},
 ], key="fc")
 
 # ---- Fan chart ------------------------------------------------------------------
 
-look = hist["Close"].iloc[-max(120, H * 4):]
+look = hist["Close"].iloc[-max(120, min(H * 3, 500)):]
 q = res.quantiles
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=look.index, y=look.values, name="Price", line=dict(color="#c9d1dc", width=1.8)))
@@ -71,96 +81,120 @@ band = lambda lo, hi, color, name: [
     go.Scatter(x=x0 + list(q.index), y=[last] + list(q[hi]), line=dict(width=0), showlegend=False, hoverinfo="skip"),
     go.Scatter(x=x0 + list(q.index), y=[last] + list(q[lo]), line=dict(width=0), fill="tonexty", fillcolor=color, name=name),
 ]
-for tr in band(0.05, 0.95, "rgba(78,168,255,0.10)", "90% of outcomes") + band(0.10, 0.90, "rgba(78,168,255,0.16)", "80%") \
-        + band(0.25, 0.75, "rgba(78,168,255,0.26)", "50%"):
+for tr in band(0.05, 0.95, "rgba(78,168,255,0.10)", "9 in 10 outcomes") + band(0.10, 0.90, "rgba(78,168,255,0.16)", "8 in 10") \
+        + band(0.25, 0.75, "rgba(78,168,255,0.26)", "Half"):
     fig.add_trace(tr)
-if st.toggle("Show individual model forecasts", value=False,
-             help="Draws each model's own forecast path. The orange blend weights them by past accuracy."):
-    for name, path in res.model_paths.items():
-        fig.add_trace(go.Scatter(x=x0 + list(q.index), y=[last] + list(path), name=name, line=dict(width=1, dash="dot")))
-fig.add_trace(go.Scatter(x=x0 + list(q.index), y=[last] + list(res.expected_price), name="Expected path",
+fig.add_trace(go.Scatter(x=x0 + list(q.index), y=[last] + list(res.expected_price), name="Middle estimate",
                          line=dict(color=ui.ORANGE, width=2.5)))
-fig.update_layout(title=dict(text=f"{sym}: where the price could be in {horizon_lbl or '1 month'}"),
+fig.update_layout(title=dict(text=f"{sym}: where the price could be in {horizon_lbl}"),
                   hovermode="x unified", yaxis_tickprefix="$")
-ui.plotly(fig, 500)
-st.caption("The shaded bands hold 50%, 80% and 90% of simulated outcomes. Wider bands mean more uncertainty.",
-           help=tip("fan_chart"))
+ui.plotly(fig, 460)
+st.caption("The shaded bands hold half, 8 in 10 and 9 in 10 of the simulated outcomes. Price models can't see news "
+           "or earnings coming, so read the drivers below with them.", help=tip("fan_chart"))
 
-# ---- Horizon table ------------------------------------------------------------------
-st.subheader("Along the way", help=tip("horizon_table"))
-checkpoints = sorted({h for h in (5, 10, 21, 42, 63) if h <= H} | {H})
-tbl = pd.DataFrame([{**res.at(h), "horizon": f"{h} days"} for h in checkpoints]).set_index("horizon").rename_axis("In")
-tbl["exp_return"] *= 100
-tbl["prob_up"] *= 100
-st.dataframe(tbl[["date", "expected", "exp_return", "prob_up", "low80", "median", "high80"]], width="stretch",
-             column_config={"date": st.column_config.DateColumn("Date", format="MMM D"),
-                            "expected": st.column_config.NumberColumn("Expected", format="$%.2f", help=tip("expected")),
-                            "exp_return": st.column_config.NumberColumn("Expected change", format="%+.1f%%", help="Expected % change from today's price."),
-                            "prob_up": st.column_config.ProgressColumn("Chance higher", min_value=0, max_value=100, format="%.0f%%", help=tip("prob_up")),
-                            "low80": st.column_config.NumberColumn("Low end (10%)", format="$%.2f", help=tip("p10")),
-                            "median": st.column_config.NumberColumn("Median", format="$%.2f", help=tip("median")),
-                            "high80": st.column_config.NumberColumn("High end (90%)", format="$%.2f", help=tip("p90"))})
+# ---- What moves it over this timeframe ------------------------------------------------------------------
 
-# ---- Model leaderboard ------------------------------------------------------------------
-st.subheader("Which models to trust", help=tip("leaderboard"))
-lb = pd.DataFrame([{
-    "Model": s.name, "Weight": s.weight * 100, f"Forecast ({H}d)": s.forecast_return * 100,
-    "Skill vs random walk": s.skill_vs_rw * 100, "Direction hit rate": s.directional_accuracy * 100,
-    "How it works": s.description,
-} for s in res.scores]).sort_values("Weight", ascending=False)
-st.dataframe(lb, hide_index=True, width="stretch", column_config={
-    "Weight": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f%%", help=tip("weight")),
-    f"Forecast ({H}d)": st.column_config.NumberColumn(format="%+.1f%%", help="This model's own forecast return over the horizon."),
-    "Skill vs random walk": st.column_config.NumberColumn(format="%+.1f%%", help=tip("skill")),
-    "Direction hit rate": st.column_config.NumberColumn("Backtested Accuracy", format="%.0f%%", help=tip("hit_rate")),
-    "How it works": st.column_config.TextColumn(help="A one-line description of the model."),
-})
-cov_txt = ui.fmt_pct(res.coverage_80, 0)
-st.caption(f"Scored on {res.n_backtest} walk-forward origins. The 80% band contained the realised price "
-           f"{cov_txt} of the time in backtest (well-calibrated ≈ 80%). Stock returns are close to unpredictable over short "
-           "horizons, so a model that doesn't beat the random walk is automatically down-weighted rather than trusted.",
-           help=tip("coverage"))
+ad = data.analyst_data(sym) or {}
+ed = data.earnings_history(sym)
+if not isinstance(ed, pd.DataFrame) or ed.empty:
+    ed = ad.get("earnings_dates")
+spy = data.market_history("2y")
+spy_c = spy["Close"] if isinstance(spy, pd.DataFrame) and "Close" in spy else pd.Series(dtype=float)
+vix_h = data.history("^VIX", "1y")
+vix = float(vix_h["Close"].dropna().iloc[-1]) if isinstance(vix_h, pd.DataFrame) and len(vix_h.get("Close", [])) else np.nan
+spy_week = float(spy_c.iloc[-1] / spy_c.iloc[-6] - 1) if len(spy_c) > 6 else np.nan
+er = drivers.earnings_record(ed, hist["Close"], spy_c if len(spy_c) else None)
+est = drivers.estimate_trend(ad.get("eps_trend"), ad.get("eps_revisions"))
+name = inf.get("shortName") or sym
+arts = sentiment.rank_articles(data.news(sym, sym) or [], f"{sym} {name}")
+news_agg = sentiment.aggregate_sentiment(arts[:30])
+g = valuation.forward_growth(ad.get("growth_estimates"))
+dv = drivers.drivers(H, info=inf, earnings=er, estimates=est, news=news_agg, close=hist["Close"], vix=vix,
+                     spy_week=spy_week, growth=g)
 
-# ---- Technical regime ------------------------------------------------------------------
-st.subheader("Technical picture", help="A snapshot of trend and momentum indicators on the daily chart.")
-panel = ind.compute_all(hist)
-sig = ind.technical_signal(panel)
-hurst = ind.hurst_exponent(hist["Close"].iloc[-500:])
+st.subheader(f"What moves it over {horizon_lbl}",
+             help="Ranked by how much each has mattered at this timeframe in SharkFin's research and the best-known "
+                  "studies. Price patterns barely predict anything at any horizon, so the list leads with earnings, "
+                  "estimates, news and value.")
+rows = []
+for it in dv["items"]:
+    rows.append(f"<div class='sf-driver'>{ui.pill(it['name'], it['tone'])}<span><b>{ui.h(it['reading'])}.</b> "
+                f"{ui.h(it['why'])}</span></div>")
+if not rows:
+    rows.append("<div class='sf-driver'><span class='sf-muted'>No earnings, estimate or news data for this stock.</span></div>")
+st.markdown(f"<div class='sf-today' style='--c:#3fa9e0'><div class='tx'>{ui.h(dv['summary'])}</div>"
+            f"<div class='sf-drivers'>{''.join(rows)}</div></div>", unsafe_allow_html=True)
+
+# ---- Earnings and catalysts ------------------------------------------------------------------
+
+st.subheader("Earnings and catalysts")
+tgt = ui.num(inf.get("targetMeanPrice"))
 ui.metrics([
-    {"label": "Signal", "value": sig["label"], "delta": f"score {sig['score']:+.2f}", "delta_color": "off",
-     "delta_arrow": "off", "help": tip("tech_signal")},
-    {"label": "Market regime", "value": sig["regime"], "delta": f"ADX {panel['adx'].iloc[-1]:.0f}", "delta_color": "off",
-     "delta_arrow": "off", "help": tip("adx_regime")},
-    {"label": "Hurst exponent", "value": ui.fmt_num(hurst),
-     "delta": "trending" if hurst > 0.55 else "mean-reverting" if hurst < 0.45 else "random-walk-like",
-     "delta_color": "off", "delta_arrow": "off", "help": tip("hurst")},
-    {"label": "Daily range (ATR)", "value": ui.fmt_pct(panel["natr_14"].iloc[-1] / 100, 2), "help": tip("natr")},
-], key="tech")
-ev = pd.DataFrame(sig["evidence"], columns=["Evidence", "Contribution"])
-fig = go.Figure(go.Bar(x=ev["Contribution"], y=ev["Evidence"], orientation="h",
-                       marker_color=np.where(ev["Contribution"] >= 0, ui.GREEN, ui.RED)))
-fig.update_layout(title=f"What's driving the signal (trend weight {'75%' if sig['regime'] == 'Trending' else '35%'} in a {sig['regime'].lower()} regime)",
-                  yaxis=dict(autorange="reversed"))
-ui.plotly(fig, 320)
+    {"label": "Next report", "value": f"{er['next']:%b %d}" if er["next"] is not None else None,
+     "delta": f"in {er['days_to_next']} days" if er["days_to_next"] is not None else None, "delta_color": "off",
+     "delta_arrow": "off"},
+    {"label": "Typical report-day move", "value": ui.fmt_pct(er["typical_move"], 1) if np.isfinite(er["typical_move"]) else None,
+     "help": "The median size of the stock's move vs the market on the day after its last 8 reports, either way."},
+    {"label": "Beat estimates", "value": f"{er['beats']} of the last 4" if er["beats"] is not None else None},
+    {"label": "Analyst target", "value": f"${tgt:,.0f}" if np.isfinite(tgt) else None,
+     "delta": f"{tgt / last - 1:+.0%} from here" if np.isfinite(tgt) else None, "delta_arrow": "off",
+     "help": "The average 12-month target. Targets tend to run a few points too high."},
+    {"label": "Estimates, 30 days", "value": ui.fmt_pct(est["chg30"], 1, True) if np.isfinite(est["chg30"]) else None,
+     "help": "How the consensus EPS estimate for next year changed over the last 30 days."},
+], key="fc_cat")
+if not er["history"].empty:
+    h = er["history"].head(4)
+    with st.expander("The last reports"):
+        st.dataframe(h, hide_index=True, width="stretch", column_config={
+            "Reported": st.column_config.DateColumn(format="MMM D, YYYY"),
+            "EPS estimate": st.column_config.NumberColumn(format="$%.2f"),
+            "Reported EPS": st.column_config.NumberColumn(format="$%.2f"),
+            "Surprise": st.column_config.NumberColumn(format="percent"),
+            "Next-day move": st.column_config.NumberColumn("Move vs market", format="percent")})
+if arts:
+    with st.expander(f"Latest headlines ({news_agg['label'].lower()} overall)"):
+        for a in arts[:6]:
+            ui.news_item(a, show_summary=False)
 
-latest = panel.iloc[-1]
-tech = {
-    "RSI (14)": latest["rsi_14"], "Stoch %K": latest["stoch_k"], "MFI (14)": latest["mfi_14"], "ADX": latest["adx"],
-    "+DI / -DI": f"{latest['plus_di']:.0f} / {latest['minus_di']:.0f}", "MACD hist": latest["hist"],
-    "Bollinger %B": latest["bb_pct_b"], "BB width": latest["bb_width"], "ATR (14)": latest["atr_14"],
-    "Realised vol (21d)": latest["rv_21"], "Parkinson vol (21d)": latest["pk_vol_21"],
-    "vs SMA 50": latest["close"] / latest["sma_50"] - 1, "vs SMA 200": latest["close"] / latest["sma_200"] - 1,
-    "vs VWAP 20": latest["close"] / latest["vwap_20"] - 1,
-}
-def _fmt(k, v):
-    if isinstance(v, str):
-        return v
-    if k.startswith("vs") or "vol" in k:
-        return ui.fmt_pct(v, 1, k.startswith("vs"))
-    return ui.fmt_num(v)
+# ---- For the technically minded ------------------------------------------------------------------
 
-
-with st.expander("All indicator readings"):
-    ui.kv([(k, _fmt(k, v)) for k, v in tech.items()])
+with st.expander("How the forecast was made"):
+    checkpoints = sorted({h for h in (5, 21, 63, 126, 252) if h <= H} | {H})
+    tbl = pd.DataFrame([{**res.at(h), "horizon": f"{h} days"} for h in checkpoints]).set_index("horizon").rename_axis("In")
+    tbl["exp_return"] *= 100
+    tbl["prob_up"] *= 100
+    st.dataframe(tbl[["date", "expected", "exp_return", "prob_up", "low80", "high80"]], width="stretch",
+                 column_config={"date": st.column_config.DateColumn("Date", format="MMM D"),
+                                "expected": st.column_config.NumberColumn("Middle", format="$%.2f"),
+                                "exp_return": st.column_config.NumberColumn("Change", format="%+.1f%%"),
+                                "prob_up": st.column_config.ProgressColumn("Chance higher", min_value=0, max_value=100,
+                                                                           format="%.0f%%"),
+                                "low80": st.column_config.NumberColumn("Low end", format="$%.2f", help=tip("p10")),
+                                "high80": st.column_config.NumberColumn("High end", format="$%.2f", help=tip("p90"))})
+    lb = pd.DataFrame([{
+        "Model": s.name, "Weight": s.weight * 100, f"Forecast ({H}d)": s.forecast_return * 100,
+        "Skill vs random walk": s.skill_vs_rw * 100, "Direction hit rate": s.directional_accuracy * 100,
+        "How it works": s.description,
+    } for s in res.scores]).sort_values("Weight", ascending=False)
+    st.dataframe(lb, hide_index=True, width="stretch", column_config={
+        "Weight": st.column_config.ProgressColumn(min_value=0, max_value=100, format="%.0f%%", help=tip("weight")),
+        f"Forecast ({H}d)": st.column_config.NumberColumn(format="%+.1f%%"),
+        "Skill vs random walk": st.column_config.NumberColumn(format="%+.1f%%", help=tip("skill")),
+        "Direction hit rate": st.column_config.NumberColumn("Backtested accuracy", format="%.0f%%", help=tip("hit_rate")),
+    })
+    st.caption(f"Scored on {res.n_backtest} past dates as if live. The 8-in-10 band held the real price "
+               f"{ui.fmt_pct(res.coverage_80, 0)} of the time (80% is right). Models that don't beat 'the price "
+               "stays where it is' get little weight, which is why most forecasts sit close to today's price plus "
+               "the stock's normal drift.", help=tip("coverage"))
+    panel = ind.compute_all(hist)
+    sig = ind.technical_signal(panel)
+    latest = panel.iloc[-1]
+    ui.kv([("Chart signal", f"{sig['label']} ({sig['regime'].lower()})"), ("RSI (14)", ui.fmt_num(latest["rsi_14"])),
+           ("vs 50-day average", ui.fmt_pct(latest["close"] / latest["sma_50"] - 1, 1, True)),
+           ("vs 200-day average", ui.fmt_pct(latest["close"] / latest["sma_200"] - 1, 1, True)),
+           ("Daily range (ATR)", ui.fmt_pct(latest["natr_14"] / 100, 2))])
+    st.caption("Chart readings are context, not drivers: in SharkFin's 2006-26 test of S&P 500 stocks, no price "
+               "pattern (momentum, the 200-day, the 52-week high, last month's move) sorted the next week to year "
+               "by more than a rank correlation of 0.05.")
 
 ui.disclaimer()
