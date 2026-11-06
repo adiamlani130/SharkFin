@@ -820,3 +820,61 @@ def test_every_speculation_theme_is_complete():
     for t in sp.THEMES:
         assert t.plays and t.why_now and t.proof and t.risks and t.bottleneck
         assert all(p.tier in sp.TIER_HELP for p in t.plays)
+
+
+def test_failed_downloads_are_remembered_briefly_and_keep_the_last_good_answer(monkeypatch):
+    import time as _t
+    from sharkfin import data
+    data._cache.clear()
+    calls, reply = [], {"v": [1]}
+
+    @data.ttl_cache(0.05)
+    def f(x):
+        calls.append(x)
+        return list(reply["v"])
+
+    assert f(1) == [1]
+    _t.sleep(0.08)
+    reply["v"] = []                        # the refresh fails...
+    assert f(1) == [1] and f.cached(1)     # ...so the last good answer stays, and isn't refetched on every rerun
+    assert f(1) == [1] and len(calls) == 2
+    monkeypatch.setattr(data, "FAIL_TTL", 0.02)
+    _t.sleep(0.03)
+    reply["v"] = [2]
+    assert f(1) == [2]                     # retried once the short failure window passed
+
+    @data.ttl_cache(60)
+    def empty():
+        calls.append("e")
+        return []
+
+    empty(), empty()
+    assert calls.count("e") == 1
+    data._cache.clear()
+
+
+def test_rss_feeds_download_with_a_timeout(monkeypatch):
+    import requests
+    from sharkfin import data
+    seen = {}
+
+    class Reply:
+        content = (b"<?xml version='1.0'?><rss><channel><item><title>Fed holds</title><link>https://x/1</link>"
+                   b"<pubDate>Fri, 06 Nov 2026 15:00:00 GMT</pubDate></item></channel></rss>")
+
+        def raise_for_status(self):
+            pass
+
+    def get(url, **kw):
+        seen.update(kw)
+        return Reply()
+
+    monkeypatch.setattr(requests, "get", get)
+    arts = data._rss("https://example.com/feed", "Test")
+    assert seen.get("timeout") and arts and arts[0]["title"] == "Fed holds"
+
+    def hang(url, **kw):
+        raise requests.Timeout("no answer")
+
+    monkeypatch.setattr(requests, "get", hang)
+    assert data._rss("https://example.com/feed", "Test") == []

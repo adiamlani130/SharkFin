@@ -16,8 +16,7 @@ TONE_COLOR = {"pos": ui.GREEN, "info": ui.BLUE, "neu": ui.MUTED, "neg": ui.RED}
 STAGE_COLOR = {k: TONE_COLOR[v[1]] for k, v in sp.STAGES.items()}
 
 
-@st.cache_data(ttl=1800, show_spinner=False)
-def prices() -> pd.DataFrame:
+def prices() -> pd.DataFrame:  # cached in the data layer (and on disk); a failed download isn't kept for 30 minutes
     return data.download_prices(tuple(sp.all_tickers() + ["SPY"]), "3y")
 
 

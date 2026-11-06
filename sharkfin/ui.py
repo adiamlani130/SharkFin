@@ -271,6 +271,17 @@ def setup():
     init_state()
 
 
+def fetch_all(jobs: list, workers: int = 8) -> None:
+    """Warm the data cache for many calls at once (see ``data.prefetch``), keeping the page interruptible.
+
+    Streamlit can only stop a running page when the page touches Streamlit, so a page that sat inside a long
+    download ignored clicks on other pages until the download finished. This touches an empty placeholder about
+    once a second while it waits: a page switch stops the wait right away, and the downloads still running finish
+    in the background and stay cached for the next visit."""
+    beat = st.empty()
+    data.prefetch(jobs, workers=workers, progress=lambda done, total: beat.empty())
+
+
 def asset(name: str) -> str:
     """A text file from ``sharkfin/assets`` (e.g. the landing page's ocean), re-read when it changes."""
     p = Path(__file__).with_name("assets") / name

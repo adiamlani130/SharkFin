@@ -33,10 +33,20 @@ _cache: dict = {}
 _lock = threading.Lock()
 
 
+FAIL_TTL = 45  # seconds an empty answer (a failed or throttled download) is remembered
+
+
 def ttl_cache(seconds):
     """Cache a function's non-empty results for ``seconds``, or for ``seconds()`` when it's a callable (read on
-    every lookup, so the lifetime can depend on the time of day)."""
+    every lookup, so the lifetime can depend on the time of day).
+
+    Empty results (what a failed download returns) are remembered too, but only for ``FAIL_TTL`` seconds: while
+    Yahoo is down or throttling, every click used to rerun the page and wait on the same timeouts again. When a
+    refresh fails and an older answer exists, the older answer is kept (and returned) until the next retry."""
     ttl = seconds if callable(seconds) else lambda: seconds
+
+    def fresh(hit, now) -> bool:
+        return bool(hit) and now - hit[0] < (min(FAIL_TTL, ttl()) if hit[2] else ttl())
 
     def deco(fn):
         @functools.wraps(fn)
@@ -45,19 +55,21 @@ def ttl_cache(seconds):
             now = time.time()
             with _lock:
                 hit = _cache.get(key)
-            if hit and now - hit[0] < ttl():
+            if fresh(hit, now):
                 return _copy(hit[1])
             val = fn(*args, **kwargs)
-            if not _is_empty(val):
-                with _lock:
-                    _cache[key] = (now, val)
+            failed = _is_empty(val)
+            if failed and hit and not _is_empty(hit[1]):
+                val = _copy(hit[1])  # the download failed: keep showing the last good answer, and retry soon
+            with _lock:
+                _cache[key] = (now, val, failed)
             return val
 
         def cached(*args, **kwargs) -> bool:
             """Whether a call with these arguments would be answered from the cache."""
             with _lock:
                 hit = _cache.get((fn.__qualname__, args, tuple(sorted(kwargs.items()))))
-            return bool(hit) and time.time() - hit[0] < ttl()
+            return fresh(hit, time.time())
 
         wrapper.cache_clear = lambda: _cache.clear()
         wrapper.cached = cached
@@ -264,7 +276,9 @@ def _fetch_prices(symbols: tuple, period: str, field: str, chunk: int) -> pd.Dat
         # errors (e.g. its SQLite timezone cache reports "database is locked");
         # retry those once, single-threaded.
         missing = [s for s in part if s not in sub.columns or sub[s].isna().all()]
-        if missing:
+        # ...but when the whole chunk came back empty Yahoo is down or blocking us, and retrying each ticker one
+        # by one would only queue up more timeouts (minutes, for a dashboard's worth of tickers).
+        if missing and (len(missing) < len(part) or len(part) <= 3):
             retry = fetch(missing, threads=False)
             if not retry.empty:
                 sub = pd.concat([sub.drop(columns=[c for c in retry.columns if c in sub.columns]), retry], axis=1)
@@ -761,12 +775,21 @@ def _parse_date(s) -> datetime | None:
         return None
 
 
+RSS_TIMEOUT = (4, 8)  # seconds to connect, seconds to read
+
+
 def _rss(url: str, source: str) -> list:
+    # feedparser's own downloader has no timeout, so a feed that stops answering used to hang the page forever
+    # (and with it page switching, which waits for the running script). Download with a timeout, then parse.
     try:
         import feedparser
+        import requests
 
-        feed = feedparser.parse(url, agent="Mozilla/5.0 SharkFin")
-    except Exception:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 SharkFin"}, timeout=RSS_TIMEOUT)
+        r.raise_for_status()
+        feed = feedparser.parse(r.content)
+    except Exception as e:  # pragma: no cover - network
+        log.warning("RSS %s failed: %s", source, e)
         return []
     out = []
     for e in feed.entries:
@@ -933,6 +956,7 @@ def market_history(period: str = "10y") -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 ALPACA_DATA = "https://data.alpaca.markets/v2"
+ALPACA_TIMEOUT = (5, 20)  # seconds to connect, seconds to read
 def yahoo_period(years: int) -> str:
     """The Yahoo download period that covers ``years`` (Yahoo has no 20y: longer spans download "max")."""
     return f"{years}y" if f"{years}y" in _PERIOD_DAYS else "max"
@@ -973,9 +997,10 @@ def _alpaca_get(path: str, params: dict) -> dict:
     keys = alpaca_keys()
     if not keys:
         return {}
+    timeouts = 0
     for attempt in range(4):
         try:
-            r = requests.get(f"{ALPACA_DATA}{path}", params=params, timeout=30,
+            r = requests.get(f"{ALPACA_DATA}{path}", params=params, timeout=ALPACA_TIMEOUT,
                              headers={"APCA-API-KEY-ID": keys[0], "APCA-API-SECRET-KEY": keys[1]})
             if r.status_code == 429 or r.status_code >= 500:
                 time.sleep(2 * (attempt + 1))
@@ -986,7 +1011,12 @@ def _alpaca_get(path: str, params: dict) -> dict:
             return r.json()
         except Exception as e:  # pragma: no cover - network
             log.warning("Alpaca %s failed: %s", path, e)
-            time.sleep(1 + attempt)
+            # A server that didn't answer at all rarely answers on the third try: give up after two, instead of
+            # holding the page for minutes (four 30-second waits, twice over, used to be possible).
+            timeouts += 1
+            if timeouts >= 2:
+                return {}
+            time.sleep(1)
     return {}
 
 

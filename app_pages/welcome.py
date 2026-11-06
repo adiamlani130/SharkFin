@@ -43,8 +43,7 @@ html, body {background: #040b13;}
 
 .st-key-sf-cta {gap: .7rem !important; margin-top: 2.1rem;}
 .st-key-sf-cta [data-testid="stPageLink"] a {padding: .7rem 1.15rem; border-radius: 10px; text-decoration: none;
-  border: 1px solid rgba(214,236,246,.24); background: rgba(5,16,27,.55); backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(214,236,246,.24); background: rgba(5,16,27,.78);
   transition: background .25s ease, border-color .25s ease, transform .25s cubic-bezier(.22,.8,.24,1), box-shadow .25s ease;}
 .st-key-sf-cta [data-testid="stPageLink"] a:hover {transform: translateY(-2px); box-shadow: 0 10px 26px -12px rgba(0,0,0,.7);}
 .st-key-sf-cta [data-testid="stPageLink"] a:hover {border-color: rgba(214,236,246,.5); background: rgba(10,30,48,.7);}

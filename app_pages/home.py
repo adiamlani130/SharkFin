@@ -5,14 +5,12 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import data, leader_dip, live, playbook, sentiment, ui
+from sharkfin import data, day_night, leader_dip, live, playbook, sentiment, ui
 from sharkfin import indicators as ind
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def load_overview():
-    syms = tuple(data.MARKET_TICKERS.values()) + tuple(data.SECTOR_ETFS.values())
-    return data.download_prices(syms, period="1y")
+OVERVIEW = tuple(data.MARKET_TICKERS.values()) + tuple(data.SECTOR_ETFS.values())
+HEADLINES = "stock market economy Fed earnings"
 
 
 status, ny = data.market_status()
@@ -20,7 +18,16 @@ ui.header("Market Dashboard", ui.pill(f"NYSE {status}", "pos" if status == "Open
           f"{ny:%A, %b %d · %I:%M %p} ET")
 
 with st.spinner("Loading markets…"):
-    px = load_overview()
+    # Everything this page reads, fetched side by side instead of one after another (the data layer caches each
+    # call, so the sections below get them instantly). The page stays responsive to clicks while it waits.
+    ui.fetch_all([(data.download_prices, (OVERVIEW,), {"period": "1y"}), (data.market_history, ("2y",)),
+                  (data.history, ("^VIX", "2y")), (data.history, ("QQQ", "2y")),
+                  (data.download_prices, (live.SECTOR_ETFS,), {"period": "2y"}),
+                  (data.intraday_bars, (day_night.SYMBOL, 35)), (data.latest_trade, (day_night.SYMBOL,)),
+                  (data.news, (HEADLINES,))] +
+                 ([(data.download_prices, (tuple(st.session_state.watchlist),), {"period": "3mo"})]
+                  if st.session_state.watchlist else []))
+    px = data.download_prices(OVERVIEW, period="1y")
 
 if px.empty:
     st.error("Market data is unavailable right now (Yahoo Finance did not respond). Try again shortly.")
@@ -76,7 +83,6 @@ if len(spx) > 200:
     ], key="pulse")
 
 # ---- Market regime light -----------------------------------------------------
-@st.cache_data(ttl=600, show_spinner=False)
 def spy_regime() -> dict:
     m = data.market_history("2y")
     vix = data.history("^VIX", "2y")
@@ -115,7 +121,6 @@ if reg:
                 f"{''.join(lines)}</div>", unsafe_allow_html=True)
 
 # ---- Strategy playbook strip ---------------------------------------------------
-@st.cache_data(ttl=120, show_spinner=False)
 def playbook_rows() -> list[dict]:
     return live.summary_rows(None, None, live.day_night_today())
 
@@ -204,7 +209,7 @@ with left:
         st.info("Your watchlist is empty. Add stocks from Research & Valuation or the Portfolio page.")
 with right:
     st.subheader("Headlines")
-    arts = sentiment.rank_articles(data.news("stock market economy Fed earnings")[:60], "stock market")
+    arts = sentiment.rank_articles(data.news(HEADLINES)[:60], "stock market")
     agg = sentiment.aggregate_sentiment(arts[:40])
     st.markdown(ui.pill(f"Tone: {agg['label']}", ui.tone(agg["score"], 0.1)) +
                 f"<span class='sf-muted'>{agg['positive']} positive · {agg['negative']} negative · {agg['neutral']} neutral "
