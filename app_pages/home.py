@@ -1,30 +1,29 @@
-"""Market dashboard: indices, regime, sector rotation, movers, sentiment."""
+"""Market dashboard: the indices, which way the market is going today and why, sectors, watchlist, headlines."""
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import data, day_night, leader_dip, live, playbook, sentiment, ui
-from sharkfin import indicators as ind
-
+from sharkfin import data, market_today as mt, sentiment, ui
 
 OVERVIEW = tuple(data.MARKET_TICKERS.values()) + tuple(data.SECTOR_ETFS.values())
 HEADLINES = "stock market economy Fed earnings"
-
+# The biggest US companies: Wall Street's view of them is most of Wall Street's view of the index.
+MEGA_CAPS = ("NVDA", "MSFT", "AAPL", "GOOGL", "AMZN", "META", "AVGO", "TSLA", "BRK-B", "JPM", "LLY", "WMT", "V",
+             "ORCL", "MA", "XOM", "NFLX", "COST", "JNJ", "PLTR", "HD", "ABBV", "BAC", "PG", "AMD", "UNH", "KO", "GE",
+             "CSCO", "MU")
 
 status, ny = data.market_status()
 ui.header("Market Dashboard", ui.pill(f"NYSE {status}", "pos" if status == "Open" else "neu") +
           f"{ny:%A, %b %d · %I:%M %p} ET")
 
 with st.spinner("Loading markets…"):
-    # Everything this page reads, fetched side by side instead of one after another (the data layer caches each
-    # call, so the sections below get them instantly). The page stays responsive to clicks while it waits.
-    ui.fetch_all([(data.download_prices, (OVERVIEW,), {"period": "1y"}), (data.market_history, ("2y",)),
-                  (data.history, ("^VIX", "2y")), (data.history, ("QQQ", "2y")),
-                  (data.download_prices, (live.SECTOR_ETFS,), {"period": "2y"}),
-                  (data.intraday_bars, (day_night.SYMBOL, 35)), (data.latest_trade, (day_night.SYMBOL,)),
-                  (data.news, (HEADLINES,))] +
+    # Everything this page reads, fetched side by side (the data layer caches each call, so the sections below
+    # get them instantly). The page stays responsive to clicks while it waits.
+    ui.fetch_all([(data.download_prices, (OVERVIEW,), {"period": "1y"}),
+                  (data.download_prices, (tuple(data.universe("S&P 500")),), {"period": "2y"}),
+                  (data.infos, (MEGA_CAPS,)), (data.news, (HEADLINES,))] +
                  ([(data.download_prices, (tuple(st.session_state.watchlist),), {"period": "3mo"})]
                   if st.session_state.watchlist else []))
     px = data.download_prices(OVERVIEW, period="1y")
@@ -49,143 +48,100 @@ def tile(name, sym):
 
 ui.metrics([t for n, sym in data.MARKET_TICKERS.items() if (t := tile(n, sym))], key="tiles")
 
-# ---- Market pulse ------------------------------------------------------------
-st.subheader("Market pulse", help="The backdrop for every trade: is the broad market trending, how far is it from its high, "
-                                  "and how nervous are options traders?")
+# ---- Today ---------------------------------------------------------------------------------------------
 spx = px.get("^GSPC", pd.Series(dtype=float)).dropna()
-vix = px.get("^VIX", pd.Series(dtype=float)).dropna()
-if len(spx) > 200:
-    trend = spx.iloc[-1] / spx.rolling(200).mean().iloc[-1] - 1
-    dd = spx.iloc[-1] / spx.max() - 1
-    rv = ind.realized_vol(spx).iloc[-1]
-    v = vix.iloc[-1] if len(vix) else np.nan
-    regime = ("calm" if v < 15 else "normal" if v < 20 else "elevated" if v < 30 else "stressed") if np.isfinite(v) else "unknown"
-    vrp = v / 100 - rv if np.isfinite(v) else np.nan
-    verdict = ("Risk-on" if trend > 0 and v < 20 else "Cautious" if trend > 0 else "Risk-off")
-    tone_ = "pos" if verdict == "Risk-on" else "neu" if verdict == "Cautious" else "neg"
-    st.markdown(
-        f"<div class='sf-card'>{ui.pill(verdict, tone_)}<span class='sf-note'>The S&amp;P 500 is "
-        f"<b>{abs(trend):.1%} {'above' if trend > 0 else 'below'}</b> its 200-day average "
-        f"({'uptrend' if trend > 0 else 'downtrend'}) and <b>{abs(dd):.1%}</b> below its 1-year high. "
-        f"Volatility is {regime} (VIX {v:.1f}).</span></div>", unsafe_allow_html=True)
-    ui.metrics([
-        {"label": "S&P 500 vs 200-day", "value": ui.fmt_pct(trend, 1, True), "delta": "Uptrend" if trend > 0 else "Downtrend",
-         "delta_color": "normal" if trend > 0 else "inverse", "delta_arrow": "off",
-         "help": "Above the 200-day average is the classic definition of a bull-market backdrop."},
-        {"label": "Off 1-year high", "value": ui.fmt_pct(dd), "help": "How far the index is below its highest close of the last year."},
-        {"label": "Realised volatility", "value": ui.fmt_pct(rv),
-         "help": "How much the S&P 500 actually moved over the last month, annualised. The long-run average is about 15-16%."},
-        {"label": "Fear gauge (VIX)", "value": f"{v:.1f}", "delta": regime.title(), "delta_color": "off", "delta_arrow": "off",
-         "help": "Options-implied volatility. Below 15 calm, 15-20 normal, 20-30 elevated, above 30 stressed."},
-        {"label": "Volatility premium", "value": ui.fmt_pct(vrp, 1, True),
-         "help": "VIX minus realised volatility. Positive (the usual state) means options price in more risk than is "
-                 "showing up; negative is a stress signal."},
-    ], key="pulse")
+sp_px = data.download_prices(tuple(data.universe("S&P 500")), period="2y")
+br = mt.breadth(sp_px.iloc[-80:] if not sp_px.empty else sp_px)
+today = mt.direction(spx, px.get("^IXIC"), px.get("^VIX"), br)
+street = mt.street_view(data.infos(MEGA_CAPS))
+arts = sentiment.rank_articles(data.news(HEADLINES)[:60], "stock market")
+sect = mt.sector_leaders(px, data.SECTOR_ETFS)
+drivers = mt.macro_drivers(px)
+themes = mt.headline_drivers(arts[:40])
 
-# ---- Market regime light -----------------------------------------------------
-def spy_regime() -> dict:
-    m = data.market_history("2y")
-    vix = data.history("^VIX", "2y")
-    return leader_dip.regime(m["Close"], vix["Close"] if not vix.empty else None) if not m.empty else {}
+st.subheader("Today", help="Which way the market is moving, how broad the move is, what analysts expect, and anything "
+                           "unusual driving it. A move counts as big when it is at least twice that asset's normal "
+                           "daily move over the past year.")
+color = {"pos": ui.GREEN, "neg": ui.RED}.get(today["tone"], ui.BLUE)
 
 
-reg = spy_regime()
-if reg:
-    on = reg["leader_dip_on"]
-    band = reg["band_on"]
-    ten = reg["ten_month_on"]
-    st.subheader("Market regime", help="Slow trend switches on SPY. In SharkFin's research these halved drawdowns, "
-                                       "while faster timing signals whipsawed and lagged plain holding.")
-    lines = [
-        f"<div class='row'><b>200-day line</b> · SPY is <b>{abs(reg['gap200']):.1%} "
-        f"{'above' if reg['above200'] else 'below'}</b> its 200-day average"
-        f"{', but VIX is above 25 (a panic)' if reg.get('panic') and not reg['above200'] else ''}, so Leader Dip's switch is "
-        f"<b>{'on: new trades allowed' if on else 'off: no new trades'}</b>.</div>",
-        f"<div class='row'><b>200-day with a 2% band</b> · "
-        f"{'Uptrend' if band else 'Downtrend' if band is False else 'Not set yet'}. It only flips on a close more than 2% "
-        f"through the average, so it changed {reg['band_flips_1y']} time{'s' if reg['band_flips_1y'] != 1 else ''} in the "
-        "past year.</div>",
-    ]
-    if ten is not None:
-        lines.append(
-            f"<div class='row'><b>10-month average</b> · SPY closed {reg['month_end']:%B} "
-            f"<b>{'above' if ten else 'below'}</b> it ({ui.fmt_money(reg['month_close']).replace('$', '&#36;')} vs "
-            f"{ui.fmt_money(reg['ten_month_avg']).replace('$', '&#36;')}). Checked once a month: "
-            f"{'stay invested' if ten else 'long-term trend money waits in cash'} until the next month end.</div>")
-    lines.append(
-        f"<div class='row'><b>Idle cash</b> · {reg['idle_cash']}. Leader Dip Plus 7 keeps money it "
-        "wasn't using in SPY while SPY was above its 200-day, and in T-bills otherwise.</div>")
-    pill_txt = "Leader Dip on" if on else "Leader Dip off"
-    st.markdown(f"<div class='sf-card'>{ui.pill(pill_txt, 'pos' if on else 'neg')}"
-                f"{ui.pill('10-month: ' + ('up' if ten else 'down'), 'pos' if ten else 'neg') if ten is not None else ''}"
-                f"{''.join(lines)}</div>", unsafe_allow_html=True)
-
-# ---- Strategy playbook strip ---------------------------------------------------
-def playbook_rows() -> list[dict]:
-    return live.summary_rows(None, None, live.day_night_today())
+def stat(k, v, s=""):
+    return f"<div><div class='k'>{ui.h(k)}</div><div class='v'>{v}</div><div class='s'>{ui.h(s)}</div></div>"
 
 
-st.subheader("Strategy playbook today", help="Where SharkFin's three researched strategies stand. Strategy Playbook has "
-                                              "the signals, how each works, and the combined plan.")
-cards = []
-for r_ in playbook_rows():
-    f_ = playbook.FACTS.get(r_["Strategy"], {})
-    on_ = r_["Switch"]
-    pill_ = ui.pill("on" if on_ else "off" if on_ is False else "n/a", "pos" if on_ else "neg" if on_ is False else "neu")
-    cards.append(f"<div class='sf-strat' style='--c:{playbook.COLORS.get(r_['Strategy'], ui.MUTED)}'>"
-                 f"<div class='nm'>{ui.h(r_['Strategy'])} {pill_}</div>"
-                 f"<div class='tg'>{f_.get('return', 0):.0%} a year in research · Sharpe {f_.get('sharpe', 0):.2f}</div>"
-                 f"<div class='bl'>{ui.h(r_['Today'])}{'. ' + ui.h(r_['Note']) if r_['Note'] else ''}.</div></div>")
-plan_ = playbook.FACTS["The plan"]
-cards.append(f"<div class='sf-strat' style='--c:{playbook.COLORS['The plan']}'><div class='nm'>The combined plan</div>"
-             f"<div class='tg'>{plan_['return']:.0%} a year · Sharpe {plan_['sharpe']:.2f}</div>"
-             "<div class='bl'>50% Leader Dip Plus 7, 20% Tech Breakout Rider, 30% TQQQ Day + Night, rebalanced monthly. "
-             "Until the TQQQ paper run passes (Dec 11), the 30% stays in Plus 7.</div></div>")
-st.markdown(f"<div class='sf-strats'>{''.join(cards)}</div>", unsafe_allow_html=True)
+trend = spx.iloc[-1] / spx.rolling(200).mean().iloc[-1] - 1 if len(spx) > 200 else np.nan
+off_high = spx.iloc[-1] / spx.iloc[-252:].max() - 1 if len(spx) else np.nan
+stats_html = "".join([
+    stat("S&P 500 today", ui.fmt_pct(today["move"], 2, True),
+         f"{abs(today['z']):.1f}x a normal day" if np.isfinite(today.get("z", np.nan)) else ""),
+    stat("Stocks rising", ui.fmt_pct(br["up_today"], 0) if np.isfinite(br["up_today"]) else "—",
+         f"{ui.fmt_pct(br['above50'], 0)} above their 50-day" if np.isfinite(br["above50"]) else "of the S&P 500"),
+    stat("Trend", f"{ui.fmt_pct(trend, 1, True)} vs 200-day" if np.isfinite(trend) else "—",
+         f"{ui.fmt_pct(off_high, 1)} from its 1-year high" if np.isfinite(off_high) else ""),
+    stat("Analysts' upside", ui.fmt_pct(street["upside"], 1, True) if street else "—",
+         (f"to targets on the {street['n']} biggest stocks · {street['buy_share']:.0%} rated buy"
+          if street and np.isfinite(street.get("buy_share", np.nan)) else "average 12-month target vs price")),
+])
 
-# ---- Sector rotation ---------------------------------------------------------
-st.subheader("Sectors", help="SPDR sector ETFs. The heatmap shows returns; the map shows which sectors are leading and "
-                             "which are gaining or losing momentum.")
 rows = []
+for d in drivers:
+    rows.append(f"<div class='sf-driver'>{ui.pill(d['driver'] + ' ' + d['move'], 'info')}<span>{ui.h(d['text'])}</span></div>")
+if sect and abs(sect["spread"]) > 0.025:
+    (bn, bv), (wn, wv) = sect["best"], sect["worst"]
+    rows.append(f"<div class='sf-driver'>{ui.pill('Sectors', 'neu')}<span>{ui.h(bn)} leads ({bv:+.1%}) and {ui.h(wn)} "
+                f"lags ({wv:+.1%}): money is rotating, not just rising or falling together.</span></div>")
+for t in themes:
+    rows.append(f"<div class='sf-driver'>{ui.pill(t['driver'], 'neu')}<span>In {t['hits']} of the latest headlines, "
+                f"e.g. <q>{ui.h(t['example'])}</q></span></div>")
+if not rows:
+    rows.append("<div class='sf-driver'><span class='sf-muted'>No single big driver today: oil, rates, the dollar and "
+                "the headlines are all moving within their normal range.</span></div>")
+
+st.markdown(f"<div class='sf-today' style='--c:{color}'><div class='hd'><span class='lb'>{ui.h(today['label'])}</span>"
+            f"{ui.pill(status, 'pos' if status == 'Open' else 'neu')}</div><div class='tx'>{ui.h(today['text'])}</div>"
+            f"<div class='st'>{stats_html}</div>"
+            f"<div class='sf-drivers'><div class='sf-muted'>What's driving it</div>{''.join(rows)}</div></div>",
+            unsafe_allow_html=True)
+if street:
+    with st.expander("Analyst targets on the biggest stocks"):
+        up = pd.Series({**street["top"], **street["bottom"]}).sort_values(ascending=False)
+        st.caption(f"Cap-weighted upside to the average 12-month analyst target across {street['n']} of the largest "
+                   f"US companies: {street['upside']:+.1%} (median stock {street['median_upside']:+.1%}). Analysts "
+                   "are usually too optimistic by a few points, so read it as a direction, not a forecast. Most and "
+                   "least upside:")
+        ui.kv([(k, f"{v:+.1%}") for k, v in up.items()])
+
+# ---- Sectors -------------------------------------------------------------------------------------------
+st.subheader("Sectors", help="SPDR sector ETFs, sorted by return over the period you pick.")
+span = st.segmented_control("Period", ["1D", "1W", "1M", "3M", "YTD"], default="1M", key="home_span",
+                            label_visibility="collapsed") or "1M"
+look = {"1D": 1, "1W": 5, "1M": 21, "3M": 63}
+rows_ = []
 for name, sym in data.SECTOR_ETFS.items():
     s = px.get(sym, pd.Series(dtype=float)).dropna()
-    if len(s) < 130:
+    if len(s) < 70:
         continue
-    rows.append({"Sector": name, "1D": s.iloc[-1] / s.iloc[-2] - 1, "1W": s.iloc[-1] / s.iloc[-6] - 1,
-                 "1M": s.iloc[-1] / s.iloc[-22] - 1, "3M": s.iloc[-1] / s.iloc[-64] - 1,
-                 "6M": s.iloc[-1] / s.iloc[-127] - 1})
-if rows:
-    sec = pd.DataFrame(rows).set_index("Sector").sort_values("1M", ascending=False)
-    left, right = st.columns([3, 2])
-    with left:
-        z = sec.values * 100
-        fig = go.Figure(go.Heatmap(z=np.clip(z, -15, 15), x=sec.columns, y=sec.index, colorscale=ui.DIVERGING,
-                                   zmid=0, text=[[f"{v:+.1f}%" for v in r] for r in z], texttemplate="%{text}",
-                                   showscale=False, xgap=2, ygap=2, hovertemplate="%{y} · %{x}: %{text}<extra></extra>"))
-        fig.update_layout(title="Returns by sector", yaxis=dict(autorange="reversed", showgrid=False),
-                          xaxis=dict(side="top", showgrid=False))
-        ui.plotly(fig, 430)
-    with right:
-        # Relative rotation: 3M momentum vs 1M change in momentum
-        # Relative to the average sector, so the quadrants read as leading / lagging.
-        x = (sec["3M"] - sec["3M"].mean()) * 100
-        y = ((sec["1M"] - sec["3M"] / 3) - (sec["1M"] - sec["3M"] / 3).mean()) * 100
-        colors = np.where((x >= 0) & (y >= 0), ui.GREEN, np.where(x >= 0, ui.ORANGE, np.where(y >= 0, ui.BLUE, ui.RED)))
-        fig = go.Figure(go.Scatter(x=x, y=y, mode="markers+text", text=sec.index, textposition="top center",
-                                   textfont=dict(size=10), marker=dict(size=11, color=colors),
-                                   hovertemplate="%{text}<br>3M vs avg %{x:+.1f}%<br>Acceleration %{y:+.1f}%<extra></extra>"))
-        fig.add_hline(y=0, line=dict(color="#2a3442"))
-        fig.add_vline(x=0, line=dict(color="#2a3442"))
-        mx, my = max(abs(x).max(), 1) * 1.25, max(abs(y).max(), 1) * 1.3
-        for qx, qy, lbl, colr in ((1, 1, "Leading", ui.GREEN), (1, -1, "Weakening", ui.ORANGE),
-                                  (-1, -1, "Lagging", ui.RED), (-1, 1, "Improving", ui.BLUE)):
-            fig.add_annotation(x=qx * mx * 0.97, y=qy * my * 0.95, text=lbl, showarrow=False, font=dict(color=colr, size=11),
-                               xanchor="right" if qx > 0 else "left", yanchor="top" if qy > 0 else "bottom", opacity=0.8)
-        fig.update_layout(title="Rotation map", xaxis=dict(title="3-month return vs average sector (%)", range=[-mx, mx]),
-                          yaxis=dict(title="Momentum change (%)", range=[-my, my]), showlegend=False)
-        ui.plotly(fig, 430)
+    if span == "YTD":
+        base = s[s.index.year == s.index[-1].year]
+        r = s.iloc[-1] / base.iloc[0] - 1 if len(base) else np.nan
+    else:
+        r = s.iloc[-1] / s.iloc[-1 - look[span]] - 1
+    rows_.append((name, r))
+if rows_:
+    sec = pd.Series(dict(rows_)).dropna().sort_values()
+    mkt = spx.iloc[-1] / spx.iloc[-1 - look.get(span, 1)] - 1 if span != "YTD" and len(spx) > 64 else np.nan
+    fig = go.Figure(go.Bar(x=sec.values * 100, y=sec.index, orientation="h",
+                           marker_color=np.where(sec.values >= 0, ui.GREEN, ui.RED), marker_line_width=0,
+                           text=[f"{v:+.1%}" for v in sec.values], textposition="outside", cliponaxis=False,
+                           hovertemplate="%{y}: %{text}<extra></extra>"))
+    if np.isfinite(mkt):
+        fig.add_vline(x=mkt * 100, line=dict(color=ui.MUTED, dash="dot", width=1), annotation_text="S&P 500",
+                      annotation_position="top", annotation_font=dict(size=10, color=ui.MUTED))
+    fig.update_layout(xaxis=dict(ticksuffix="%", zeroline=True, zerolinecolor="#2a3442"), yaxis=dict(showgrid=False),
+                      margin=dict(l=10, r=40, t=10, b=30), bargap=0.35)
+    ui.plotly(fig, 360, key="home_sectors")
 
-# ---- Watchlist + portfolio snapshot ------------------------------------------
+# ---- Watchlist + headlines -----------------------------------------------------------------------------
 left, right = st.columns(2)
 with left:
     st.subheader("Watchlist")
@@ -209,7 +165,6 @@ with left:
         st.info("Your watchlist is empty. Add stocks from Research & Valuation or the Portfolio page.")
 with right:
     st.subheader("Headlines")
-    arts = sentiment.rank_articles(data.news(HEADLINES)[:60], "stock market")
     agg = sentiment.aggregate_sentiment(arts[:40])
     st.markdown(ui.pill(f"Tone: {agg['label']}", ui.tone(agg["score"], 0.1)) +
                 f"<span class='sf-muted'>{agg['positive']} positive · {agg['negative']} negative · {agg['neutral']} neutral "

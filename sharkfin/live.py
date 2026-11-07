@@ -65,7 +65,7 @@ def sector_ret3(ohlc: dict, period: str = "2y") -> pd.DataFrame | None:
 
 @data.ttl_cache(1800)
 def leader_dip_today() -> pd.DataFrame:
-    """Every S&P 500 stock's Leader Dip Plus reading at the last close (signals have Signal == True)."""
+    """Every S&P 500 stock's Dive Zone reading at the last close (signals have Signal == True)."""
     ohlc = sp500_ohlcv()
     if "Close" not in ohlc or ohlc["Close"].shape[1] < 10:
         return pd.DataFrame()
@@ -107,13 +107,13 @@ def day_night_today() -> dict:
     return out
 
 
-def summary_rows(ld: pd.DataFrame | None, br: pd.DataFrame | None, dn: dict | None) -> list[dict]:
+def summary_rows(ld: pd.DataFrame | None, br: pd.DataFrame | None, dn: dict | None = None) -> list[dict]:
     """One status line per strategy for dashboards."""
     sw = switches()
     rows = []
     ldsw = sw.get("leader_dip", {})
     n_ld = int(ld["Signal"].sum()) if ld is not None and len(ld) else None
-    rows.append({"Strategy": "Leader Dip Plus 7", "Switch": ldsw.get("on"),
+    rows.append({"Strategy": "Dive Zone", "Switch": ldsw.get("on"),
                  "Today": (f"{n_ld} signal{'s' if n_ld != 1 else ''}" if n_ld is not None else "Signals on the Strategy Playbook page"),
                  "Note": ("SPY above its 200-day" if ldsw.get("gap", np.nan) and ldsw.get("gap", 0) > 0 else
                           "VIX panic: buying allowed" if ldsw.get("panic") else "SPY below its 200-day: no new trades")
@@ -124,11 +124,4 @@ def summary_rows(ld: pd.DataFrame | None, br: pd.DataFrame | None, dn: dict | No
                  "Today": (f"{n_br} signal{'s' if n_br != 1 else ''}" if n_br is not None else "Signals on the Strategy Playbook page"),
                  "Note": ("QQQ 21-day EMA above its 50-day" if brsw.get("on") else "QQQ 21-day EMA under its 50-day: no new trades")
                  if brsw else "QQQ data unavailable"})
-    if dn:
-        state = "in a day trade" if dn.get("in_trade") else "flat"
-        night = "weak close so far: night buy likely" if dn.get("weak_close") else "no weak close so far"
-        rows.append({"Strategy": "TQQQ Day + Night", "Switch": True, "Today": f"{state}; {night}",
-                     "Note": f"band {dn['next_band']:.2f} at {dn['next_check']}" if dn.get("next_check") else "session over"})
-    else:
-        rows.append({"Strategy": "TQQQ Day + Night", "Switch": None, "Today": "intraday data unavailable", "Note": ""})
     return rows

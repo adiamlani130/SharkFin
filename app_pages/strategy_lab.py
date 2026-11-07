@@ -13,8 +13,8 @@ from sharkfin import builder, data, leader_dip, live, swing, ui
 from sharkfin.explain import tip
 
 ui.header("Strategy Lab",
-          "Pick a ready-made strategy or build your own from indicators, then see how it would have traded. "
-          "Signals use the day's close and fill at the next open, and every trade pays costs.")
+          "Start from one of four well-known strategies or build your own from indicators, then see how it would have "
+          "traded. Signals use the day's close and fill at the next open, and every trade pays costs.")
 
 c1, c2, c3 = st.columns([3, 2, 2], vertical_alignment="bottom")
 with c1:
@@ -70,7 +70,7 @@ def _load(name: str):
 
 
 if "lab_strategy" not in st.session_state:
-    _load("MACD momentum")
+    _load("Above the 200-day EMA")
 
 
 def _add(kind: str):
@@ -125,7 +125,7 @@ def condition_rows(kind: str):
 
 
 # ---------------------------------------------------------------------------
-tabs = st.tabs(["Build and test", "Compare strategies", "Leader Dip Plus 7 (S&P 500)"])
+tabs = st.tabs(["Build and test", "Compare strategies", "Dive Zone (S&P 500)"])
 
 def build_tab():
     names = list(builder.TEMPLATES)
@@ -178,11 +178,11 @@ def build_tab():
     buy_txt, sell_txt = builder.describe_strategy(s)
     u1, u2 = st.columns([2, 5], vertical_alignment="center")
     if u1.button("Use as my swing strategy", icon=":material/bookmark_add:",
-                 help="Top Performers → Swing setups and Research → Trade setup will use these rules instead of "
-                      "Leader Dip. Switch back any time from the Swing strategy box on either page."):
+                 help="Top Performers → Swing setups will use these rules instead of Dive Zone. Switch back any "
+                      "time from the Swing strategy box there."):
         if ui.save_my_swing_rules(swing.clean(s)):
             ui.set_swing_choice(swing.MINE)
-            st.toast("Saved. Top Performers and Research now use these rules for swing trades.")
+            st.toast("Saved. Top Performers now uses these rules for swing trades.")
         else:
             st.toast("Couldn't save the rules on the server.")
     current = ui.swing_choice()
@@ -344,9 +344,8 @@ with tabs[0]:
 # ---------------------------------------------------------------------------
 with tabs[1]:
     st.caption("Every ready-made strategy on the same stock and the same dates, side by side.")
-    chosen = st.multiselect("Strategies", list(builder.TEMPLATES)[:-1],
-                            default=["Above the 200-day", "Golden cross", "MACD momentum", "55-day breakout",
-                                     "RSI dip in an uptrend"])
+    chosen = st.multiselect("Strategies", list(builder.TEMPLATES)[1:-1],
+                            default=list(builder.TEMPLATES)[1:-1])
     if chosen:
         runs = {}
         with st.spinner("Walking each strategy forward…"):
@@ -412,32 +411,29 @@ def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: f
 
 def leader_dip_tab():
     st.markdown(
-        "<div class='sf-note'><b>Leader Dip Plus 7</b>, SharkFin's swing system, the one behind Top Performers and Trade "
-        "setup. It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and among "
-        "the 30% strongest in the S&amp;P 500 over 6 months, if it has at least one quality point (a deep dip, a stock "
-        "well off its high, a sector selloff or VIX above 20), with a limit order 3% under the signal close. It sells at "
-        "a profit target of the signal close + 1.5 ATR, or at the next open once the 2-day RSI closes above 70, the "
-        "stock closes under its 200-day, or 10 days pass. It opens trades while SPY is above its 200-day or VIX is above "
-        "25, holds 7 at a time, and parks idle cash in SPY. <b>Classic</b> is the original rules (10 slots, RSI exit "
-        "only). Strategy Playbook explains why it works.</div>", unsafe_allow_html=True)
-    q = st.columns(5)
+        "<div class='sf-note'><b>Dive Zone</b>, SharkFin's swing system and the one behind Top Performers → Swing "
+        "setups. It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and "
+        "among the 30% strongest in the S&amp;P 500 over 6 months, if it has at least one quality point (a deep dip, a "
+        "stock well off its high, a sector selloff or VIX above 20), with a limit order 3% under the signal close. It "
+        "sells at a profit target of the signal close + 1.5 ATR, or at the next open once the 2-day RSI closes above 70, "
+        "the stock closes under its 200-day, or 10 days pass. It opens trades while SPY is above its 200-day or VIX is "
+        "above 25, holds 7 at a time, and parks idle cash in SPY. Strategy Playbook explains why it works.</div>",
+        unsafe_allow_html=True)
+    q = st.columns(4)
     universe = q[0].selectbox("Stocks", ["S&P 500", "Nasdaq-100"], key="ld_uni")
-    rules_label = q[1].selectbox("Rules", list(leader_dip.RULESETS), key="ld_rules")
-    years = q[2].segmented_control("History", ["10y", "20y"], default="10y", key="ld_years") or "10y"
-    cash_label = q[3].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=0, key="ld_cash",
+    years = q[1].segmented_control("History", ["10y", "20y"], default="10y", key="ld_years") or "10y"
+    cash_label = q[2].selectbox("Idle cash", list(leader_dip.CASH_CHOICES), index=0, key="ld_cash",
                                 help=leader_dip.CASH_HELP)
-    rules_key = leader_dip.RULESETS[rules_label]
-    slots = q[4].slider("Slots", 3, 20, leader_dip.SLOTS if rules_key == "plus" else leader_dip.CLASSIC_SLOTS,
-                        key=f"ld_slots_{rules_key}", help=tip("ld_slots"))
+    slots = q[3].slider("Slots", 3, 20, leader_dip.SLOTS, key="ld_slots_plus", help=tip("ld_slots"))
     st.caption(f"Costs: {cost:g} bps on each buy and each sell (set at the top of the page; the research used 10).")
-    if not (st.button(f"Backtest Leader Dip on the {universe}", type="primary", key="ld_run")
+    if not (st.button(f"Backtest Dive Zone on the {universe}", type="primary", key="ld_run")
             or st.session_state.get("ld_ran")):
         st.caption("Downloads daily prices for every stock in the index, so the first run takes a minute.")
         return
     st.session_state.ld_ran = True
     try:
         with st.spinner(f"Downloading the {universe}, then picking settings year by year…"):
-            res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost), rules_key)
+            res = leader_dip_run(universe, years, leader_dip.CASH_CHOICES[cash_label], int(slots), float(cost))
     except ValueError as e:
         st.warning(str(e))
         return
@@ -465,7 +461,7 @@ def leader_dip_tab():
     ], key="ldm", cols=6)
 
     eq = res["equity"] * START
-    fig = go.Figure([go.Scatter(x=eq.index, y=eq, name=f"Leader Dip, idle cash in {cash_label.split(' while')[0]}",
+    fig = go.Figure([go.Scatter(x=eq.index, y=eq, name=f"Dive Zone, idle cash in {cash_label.split(' while')[0]}",
                                 line=dict(color=ui.GREEN, width=2)),
                      go.Scatter(x=eq.index, y=res["spy_equity"] * START, name="SPY", line=dict(color=ui.MUTED, width=1.4)),
                      go.Scatter(x=eq.index, y=res["basket_equity"] * START, name=f"Equal-weight {universe}",
@@ -475,7 +471,7 @@ def leader_dip_tab():
     expo = res["exposure"].rolling(21).mean()
     fig = go.Figure(go.Scatter(x=expo.index, y=expo * 100, fill="tozeroy", line=dict(color=ui.BLUE, width=1),
                                name="Invested in trades"))
-    fig.update_layout(title="Share of the account in Leader Dip trades (1-month average)", yaxis=dict(ticksuffix="%", range=[0, 100]))
+    fig.update_layout(title="Share of the account in Dive Zone trades (1-month average)", yaxis=dict(ticksuffix="%", range=[0, 100]))
     ui.plotly(fig, 220)
 
     ui.walk_forward_table(res, "ld_wf")
@@ -491,7 +487,7 @@ def leader_dip_tab():
         fig.add_scatter(x=done["Sold"], y=done["Sell price"], mode="markers", name="Sell", text=done["Why it sold"],
                         hovertemplate="%{text}: $%{y:.2f}<extra></extra>",
                         marker=dict(symbol="triangle-down", size=10, color=ui.RED))
-        fig.update_layout(title=f"{sym}: Leader Dip buys and sells", hovermode="x unified")
+        fig.update_layout(title=f"{sym}: Dive Zone buys and sells", hovermode="x unified")
         ui.plotly(fig, 360)
     with st.expander(f"Every trade ({len(tr)})"):
         st.dataframe(tr.iloc[::-1], hide_index=True, width="stretch", height=360, column_config={
@@ -506,11 +502,11 @@ def leader_dip_tab():
         yr.iloc[0] = res["equity"].resample("YE").last().iloc[0] / res["equity"].iloc[0] - 1
         spy_yr = res["spy_equity"].resample("YE").last().pct_change()
         spy_yr.iloc[0] = res["spy_equity"].resample("YE").last().iloc[0] / res["spy_equity"].iloc[0] - 1
-        ytab = pd.DataFrame({"Leader Dip": yr.values, "SPY": spy_yr.values}, index=yr.index.year)
+        ytab = pd.DataFrame({"Dive Zone": yr.values, "SPY": spy_yr.values}, index=yr.index.year)
         ytab["Trades"] = by_year.groupby("Year").size().reindex(ytab.index).fillna(0).astype(int)
         st.markdown("**Year by year**")
         st.dataframe(ytab, width="stretch", column_config={
-            "Leader Dip": st.column_config.NumberColumn(format="percent"), "SPY": st.column_config.NumberColumn(format="percent")})
+            "Dive Zone": st.column_config.NumberColumn(format="percent"), "SPY": st.column_config.NumberColumn(format="percent")})
     st.caption("S&P 500: stocks are only ranked and traded on days they were in the index. Yahoo no longer has prices "
                "for some that left (usually takeovers and failures), so a little survivorship bias remains. Nasdaq-100: "
                "SharkFin has no membership history for it, so it uses today's members and the results run high.")

@@ -132,9 +132,9 @@ def test_strategy_lab_builder_and_leader_dip():
     _ok(at)
     labels = {m.label for m in at.metric}
     assert {"Return per year", "Worst drop", "Winning trades"}.issubset(labels)
-    at.selectbox(key="lab_tpl").set_value("RSI dip in an uptrend").run()
+    at.selectbox(key="lab_tpl").set_value("Golden cross").run()
     _ok(at)
-    assert any("RSI(14) is below 35" in md.value for md in at.markdown)
+    assert any("SMA(50) is above SMA(200)" in md.value for md in at.markdown)
     next(b for b in at.button if b.label == "Add a buy rule").click().run()
     _ok(at)
     removes = [b for b in at.button if b.key and b.key.endswith("_x")]
@@ -147,13 +147,14 @@ def test_strategy_lab_builder_and_leader_dip():
     _ok(at)
 
 
-def test_research_trade_setup_tab():
+def test_research_target_and_entry_tab():
     at = _page("research")
     _ok(at)
     labels = {m.label for m in at.metric}
-    assert "Fair value" in labels
-    assert {"2-day RSI", "vs 200-day average", "6-month strength", "Market switch", "Profit target", "Swing (Leader Dip Plus 7)"}.issubset(labels)
+    assert {"Fair value", "12-month target", "Entry range"}.issubset(labels)
+    assert any("Ideal entry range" in md.value for md in at.markdown)
     assert any("vs its sector" in lab for lab in labels) and {"Shark Score", "Value", "Risk"}.issubset(labels)
+    assert not any(t.label == "Trade setup" for t in at.tabs)
 
 
 def test_scanner_shows_signals_and_logs_them(monkeypatch, tmp_path):
@@ -193,23 +194,14 @@ def test_scanner_could_run_and_ranking_check():
     assert any(m.label == "Months ahead" for m in at.metric)
 
 
-def test_swing_choice_follows_the_user_across_pages(tmp_path):
+def test_swing_choice_is_remembered(tmp_path):
     at = _scanned("Swing setups")
     at.session_state["tp_view"] = "Swing setups"  # AppTest doesn't send the open tab back with other widgets
-    at.selectbox(key="swing_pick_tp").set_value("Volume breakout").run()
+    at.selectbox(key="swing_pick_tp").set_value("Tech Breakout Rider").run()
     _ok(at)
-    assert any("Buys</b> at the next open" in md.value for md in at.markdown)
     assert (tmp_path / ".sharkfin" / "swing_choice.json").exists()
-    rs = _page("research")
-    _ok(rs)
-    labels = {m.label for m in rs.metric}
-    assert "Swing (Volume breakout)" in labels and "Trades (5 years)" in labels
-    rs.selectbox(key="swing_pick_rs").set_value("Leader Dip Plus 7").run()
-    _ok(rs)
-    assert "Swing (Leader Dip Plus 7)" in {m.label for m in rs.metric}
-    rs.selectbox(key="swing_pick_rs").set_value("Tech Breakout Rider").run()
-    _ok(rs)
-    assert {"ADX (14)", "Tech switch"}.issubset({m.label for m in rs.metric})
+    at.selectbox(key="swing_pick_tp").set_value("Dive Zone").run()
+    _ok(at)
 
 
 def test_strategy_lab_saves_my_swing_strategy(tmp_path):
@@ -217,22 +209,42 @@ def test_strategy_lab_saves_my_swing_strategy(tmp_path):
     next(b for b in at.button if b.label == "Use as my swing strategy").click().run()
     _ok(at)
     assert (tmp_path / ".sharkfin" / "my_swing_strategy.json").exists()
-    rs = _page("research")
-    _ok(rs)
-    assert "Swing (My Strategy Lab strategy)" in {m.label for m in rs.metric}
+    tp = _scanned("Swing setups")
+    tp.session_state["tp_view"] = "Swing setups"
+    tp.run()
+    _ok(tp)
+    assert tp.selectbox(key="swing_pick_tp").value == "My Strategy Lab strategy"
 
 
 def test_playbook_every_view_and_scan():
     at = _page("playbook")
     _ok(at)
-    for view in ("Leader Dip Plus 7", "Tech Breakout Rider", "TQQQ Day + Night", "The combined plan"):
+    labels = set()
+    for view in ("Dive Zone", "Tech Breakout Rider", "Using both", "What we tested"):
         at.session_state["pb_view"] = view
         at.run()
         _ok(at)
-        for b in [b for b in at.button if b.key in ("pb_ld_scan", "pb_br_scan", "pb_ld_run", "pb_br_run", "pb_dn_run")]:
+        labels |= {m.label for m in at.metric}
+        for b in [b for b in at.button if b.key in ("pb_ld_scan", "pb_br_scan", "pb_ld_run", "pb_br_run")]:
             b.click().run()
             _ok(at)
-        if view == "TQQQ Day + Night":
-            assert any(m.label == "Session VWAP" for m in at.metric)
-    labels = {m.label for m in at.metric}
+        if view == "What we tested":
+            assert any("VIX and GEX filters" in md.value for md in at.markdown)
     assert {"Return per year", "Sharpe ratio", "Worst drop"}.issubset(labels)
+    assert not any("TQQQ" in str(getattr(b, "label", "")) for b in at.button)
+
+
+def test_forecast_drivers_change_with_the_timeframe():
+    at = _page("predictions")
+    _ok(at)
+    seen = {}
+    for h in ("1 week", "1 year"):
+        at.session_state["pred_h"] = h
+        at.run()
+        _ok(at)
+        assert any(f"What moves it over {h}" in s.value for s in at.subheader)
+        html = " ".join(m.value for m in at.markdown if "sf-driver" in m.value)
+        seen[h] = html
+    assert "Earnings report" in seen["1 week"] or "News tone" in seen["1 week"]
+    assert "Valuation" in seen["1 year"] or "Business quality" in seen["1 year"] or "Growth" in seen["1 year"]
+    assert seen["1 week"] != seen["1 year"]
