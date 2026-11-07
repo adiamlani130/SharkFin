@@ -18,6 +18,7 @@ SOURCES = [p for d in ("sharkfin", "app_pages") for p in (ROOT / d).rglob("*.py"
 ALLOWED_NEGATIVE_SHIFTS = {
     "sharkfin/day_night.py": 3,     # night leg: next session's open and date (the trade's exit), next row's date
     "sharkfin/forecasting.py": 1,   # training target, purged so it ends before the forecast origin
+    "sharkfin/growth_lab.py": 2,    # fear studies: the next session's open as the fill price / holding return
 }
 
 
@@ -141,7 +142,7 @@ def test_every_strategy_walks_forward():
     mem = data.sp500_members(ohlc["Close"].index, ohlc["Close"].columns)
     ld = leader_dip.walk_forward(ohlc, spy, tbill_yields=tb, members=mem)
     assert len(ld["folds"]) and ld["equity"].index.min() > ohlc["Close"].index[walkforward.TRAIN_YEARS * 252]
-    lab = builder.walk_forward(fakes.history("AAPL"), builder.template("RSI dip in an uptrend"), 5, 0.04, spy)
+    lab = builder.walk_forward(fakes.history("AAPL"), builder.template("Golden cross"), 5, 0.04, spy)
     assert len(lab["folds"]) and lab["knobs"]
     fx = factors.walk_forward(ohlc["Close"], members=mem)
     assert len(fx["folds"]) and np.isfinite(fx["ic_mean"])

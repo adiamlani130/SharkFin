@@ -1,93 +1,110 @@
-# Graph Report - SharkFin  (2026-10-19)
+# Graph Report - SharkFin  (2026-11-06)
 
 ## Corpus Check
-- 54 files · ~105,452 words
+- 59 files · ~109,761 words
 - Verdict: corpus is large enough that graph structure adds value.
-- Unclassified: 20 file(s) not represented in the graph (top: .csv 18, (none) 1, .toml 1)
+- Unclassified: 34 file(s) not represented in the graph (top: .csv 32, (none) 1, .toml 1)
+- WARNING: 34 of 101 files seen (34%) have no supported extractor and are missing from this graph entirely. It may look complete while representing only part of the codebase.
 
 ## Summary
-- 1303 nodes · 3514 edges · 49 communities (46 shown, 3 thin omitted)
-- Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 105 edges (avg confidence: 0.85)
+- 1403 nodes · 3706 edges · 76 communities (54 shown, 22 thin omitted)
+- Extraction: 96% EXTRACTED · 4% INFERRED · 0% AMBIGUOUS · INFERRED: 130 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `7af29e55`
+- Built from commit: `afb59c20`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - Valuation & Quality Scores
 - ratings.py
-- streamlit
+- h
 - Strategy Builder & Swing
 - App Pages & Landing Animation
 - Return Forecasting Models
 - test_app.py
 - risk.py
-- Leader Dip Strategy
+- leader_dip.py
 - ui.py
 - day_night.py
-- ttl_cache
+- live.py
 - catalysts.py
 - Playbook Page
-- Market Data Fetching
-- test_core.py
-- Walk-Forward Engine
-- sharkfin/playbook.py
-- sharkfin/speculation.py
-- download_prices
-- sharkfin/portfolio.py
+- data.py
+- backtest_price_composite
+- walkforward.py
 - pandas
-- Membership & Intraday Data
-- Breakout Rider Strategy
-- Setup Views
+- sharkfin/speculation.py
+- stock_ratings
+- sharkfin/portfolio.py
 - daily_cash
-- nq_gex_plays.py
+- DataFrame
 - fakes.py
+- breakout_rider.py
+- nq_gex_plays.py
+- scanner.py
 - nq_lab.py
 - Day
 - Strategy Lab
 - levels.py
 - run
 - sharkfin/__init__.py
-- test_leaks.py
-- research.py
 - _cached_panel
+- market_today.py
+- research.py
 - load_scan
-- numpy
-- home.py
+- pathlib
+- drivers.py
 - MCP Servers
 - Current Logo
-- opex_days
-- Series
+- day_view
+- json
 - Series
 - Offline Test Design
-- _intraday_ttl
+- test_core.py
+- test_leaks.py
 - nq_regimes.py
+- factors.py
+- Results
+- sentiment.py
+- load
+- targets.py
+- _intraday_ttl
+- _fetch_prices
+- risk_contributions
+- asset
+- test_rss_feeds_download_with_a_timeout
+- swing_returns
+- forward_growth
+- run
+- test_failed_downloads_are_remembered_briefly_and_keep_the_last_good_answer
+- _fear_day
+- test_page_renders
 
 ## God Nodes (most connected - your core abstractions)
 1. `Financials` - 39 edges
-2. `ttl_cache()` - 37 edges
+2. `ttl_cache()` - 39 edges
 3. `_line()` - 28 edges
-4. `catalysts_view()` - 25 edges
-5. `build_tab()` - 25 edges
-6. `_sw()` - 22 edges
-7. `quality_metrics()` - 22 edges
-8. `plan_view()` - 21 edges
-9. `compute_all()` - 18 edges
-10. `ema()` - 18 edges
+4. `build_tab()` - 25 edges
+5. `catalysts_view()` - 25 edges
+6. `quality_metrics()` - 22 edges
+7. `_sw()` - 22 edges
+8. `backtest()` - 18 edges
+9. `Day` - 18 edges
+10. `sp500_table()` - 18 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `Rules` --references--> `sp500_members()`  [INFERRED]
+  docs/GROWTH_LAB.md → sharkfin/data.py
 - `How the backtests avoid leakage` --references--> `run()`  [INFERRED]
   docs/NQ_STRATEGY_LAB.md → sharkfin/walkforward.py
-- `stock_ratings()` --calls--> `to_gics()`  [EXTRACTED]
-  app_pages/research.py → sharkfin/ratings.py
+- `stat()` --calls--> `h()`  [EXTRACTED]
+  app_pages/home.py → sharkfin/ui.py
 - `get_universe()` --calls--> `universe()`  [EXTRACTED]
   app_pages/scanner.py → sharkfin/data.py
-- `swing_tab()` --calls--> `about()`  [EXTRACTED]
-  app_pages/scanner.py → sharkfin/swing.py
-- `stage_pill()` --calls--> `h()`  [EXTRACTED]
-  app_pages/speculation.py → sharkfin/ui.py
+- `load_scan()` --indirect_call--> `earnings_history()`  [INFERRED]
+  app_pages/scanner.py → sharkfin/data.py
 
 ## Import Cycles
 - None detected.
@@ -97,127 +114,127 @@
 - **Far-to-Near Swell Rendering Pipeline** — sharkfin_assets_ocean_draw, sharkfin_assets_ocean_surface, sharkfin_assets_ocean_fillbelow, sharkfin_assets_ocean_reach, sharkfin_assets_ocean_swell [EXTRACTED 1.00]
 - **Backtest Integrity Safeguards** — readme_sliding_walk_forward, readme_no_lookahead_leak_test, readme_point_in_time_sp500 [INFERRED 0.85]
 
-## Communities (49 total, 3 thin omitted)
+## Communities (76 total, 22 thin omitted)
 
 ### Community 0 - "Valuation & Quality Scores"
 Cohesion: 0.06
-Nodes (28): net_buyback_yield(), altman_z(), dcf(), DCFResult, default_growth(), Financials, implied_prices(), justified_pb_value() (+20 more)
+Nodes (29): core_long_checklist(), net_buyback_yield(), altman_z(), dcf(), DCFResult, default_growth(), Financials, implied_prices() (+21 more)
 
 ### Community 1 - "ratings.py"
-Cohesion: 0.09
-Nodes (23): get_universe(), leader_dip_tab(), log_prices(), log_signals(), market_close(), ratings_tab(), rule_signals(), scan() (+15 more)
+Cohesion: 0.16
+Nodes (10): _blend(), price_components(), ratings(), score_list(), sector_context(), sector_rank(), shark_score(), value_inputs() (+2 more)
 
-### Community 2 - "streamlit"
-Cohesion: 0.14
-Nodes (15): catalysts_view(), _filings(), render(), _tone_line(), switch_strip(), esc(), header(), kv() (+7 more)
+### Community 2 - "h"
+Cohesion: 0.12
+Nodes (12): overview(), breakout_tab(), card(), pct(), prices(), stage_pill(), updown(), explain() (+4 more)
 
 ### Community 3 - "Strategy Builder & Swing"
-Cohesion: 0.07
-Nodes (33): _add(), C(), _close(), compare_templates(), condition_mask(), describe(), describe_strategy(), _fmt_value() (+25 more)
+Cohesion: 0.06
+Nodes (36): api_key(), available(), _default(), stream_report(), C(), _close(), compare_templates(), condition_mask() (+28 more)
 
 ### Community 4 - "App Pages & Landing Animation"
 Cohesion: 0.06
 Nodes (40): SharkFin README, AI Analyst Research Note (Claude), Alpaca Market Data (read-only), Combined Plan (50/20/30), Core Longs Screen, Could Run Screen, Forecasts Page (Walk-forward Ensemble), GARCH(1,1) Filtered Historical Simulation (+32 more)
 
 ### Community 5 - "Return Forecasting Models"
-Cohesion: 0.07
-Nodes (18): run_forecast(), ArimaModel, BayesianDrift, DampedTrendETS, ensemble_forecast(), fit_garch(), nll(), ForecastResult (+10 more)
+Cohesion: 0.08
+Nodes (17): ArimaModel, BayesianDrift, DampedTrendETS, ensemble_forecast(), fit_garch(), nll(), ForecastResult, _garch_recursion() (+9 more)
 
 ### Community 6 - "test_app.py"
-Cohesion: 0.17
-Nodes (19): offline(), _ok(), _page(), _scanned(), test_news_catalysts_view_and_10k_compare(), test_news_flags_big_beats(), test_page_renders(), test_playbook_every_view_and_scan() (+11 more)
+Cohesion: 0.21
+Nodes (18): _ok(), _page(), _scanned(), test_forecast_drivers_change_with_the_timeframe(), test_news_catalysts_view_and_10k_compare(), test_news_flags_big_beats(), test_playbook_every_view_and_scan(), test_research_target_and_entry_tab() (+10 more)
 
 ### Community 7 - "risk.py"
-Cohesion: 0.12
-Nodes (19): compare(), positions(), run(), Strategy, annualized_return(), annualized_vol(), beta_alpha(), blume_adjusted_beta() (+11 more)
+Cohesion: 0.18
+Nodes (15): market_beta(), annualized_return(), annualized_vol(), beta_alpha(), blume_adjusted_beta(), calmar_ratio(), cornish_fisher_var(), drawdown_series() (+7 more)
 
-### Community 8 - "Leader Dip Strategy"
-Cohesion: 0.06
-Nodes (49): _market_gap(), build_features(), adx(), atr(), bollinger(), compute_all(), donchian(), ema() (+41 more)
+### Community 8 - "leader_dip.py"
+Cohesion: 0.05
+Nodes (50): compare(), positions(), run(), Strategy, _market_gap(), build_features(), adx(), atr() (+42 more)
 
 ### Community 9 - "ui.py"
-Cohesion: 0.11
-Nodes (18): choices(), asset(), disclaimer(), hero(), init_state(), _load(), load_list(), my_swing_rules() (+10 more)
+Cohesion: 0.09
+Nodes (25): _filings(), render(), _tone_line(), switch_strip(), clean_text(), compact_frame(), disclaimer(), esc() (+17 more)
 
 ### Community 10 - "day_night.py"
-Cohesion: 0.12
-Nodes (17): backtest(), bands(), close_location(), day_leg(), decision_location(), hold_after_check(), leg_stats(), night_leg() (+9 more)
+Cohesion: 0.11
+Nodes (18): backtest(), bands(), close_location(), day_leg(), decision_location(), hold_after_check(), leg_stats(), night_leg() (+10 more)
 
-### Community 11 - "ttl_cache"
-Cohesion: 0.15
-Nodes (11): all_symbols(), download_ohlcv(), nasdaq100(), risk_free_rate(), search(), ttl_cache(), universe(), leader_dip_today() (+3 more)
+### Community 11 - "live.py"
+Cohesion: 0.08
+Nodes (23): br_backtest(), ld_backtest(), leader_dip_run(), tech_universe(), download_ohlcv(), last_years(), sp500_ever(), sp500_members() (+15 more)
 
 ### Community 12 - "catalysts.py"
-Cohesion: 0.06
-Nodes (33): could_run_tab(), _col(), core_long_checklist(), core_long_screen(), could_run(), earnings_beat_flag(), earnings_summary(), filing_change() (+25 more)
+Cohesion: 0.09
+Nodes (24): catalysts_view(), _col(), core_long_screen(), could_run(), earnings_beat_flag(), earnings_summary(), filing_change(), insider_summary() (+16 more)
 
 ### Community 13 - "Playbook Page"
-Cohesion: 0.18
-Nodes (19): backtest_summary(), br_signals(), breakout_view(), day_night_view(), dn_backtest(), dn_today(), kpis(), ld_signals() (+11 more)
+Cohesion: 0.17
+Nodes (21): backtest_summary(), both_view(), br_signals(), breakout_view(), dive_zone_view(), kpis(), lab_table(), ld_signals() (+13 more)
 
-### Community 14 - "Market Data Fetching"
-Cohesion: 0.08
-Nodes (23): html_to_text(), analyst_data(), _copy(), _edgar_filings(), _fetch_ohlcv(), _fetch_prices(), fetch(), financials() (+15 more)
+### Community 14 - "data.py"
+Cohesion: 0.10
+Nodes (16): html_to_text(), all_symbols(), _copy(), _edgar_filings(), market_status(), nasdaq100(), news(), _NYSECalendar (+8 more)
 
-### Community 15 - "test_core.py"
-Cohesion: 0.06
-Nodes (35): backtest_price_composite(), composite_scores(), earnings_factor_frame(), _earnings_table(), explain(), price_factor_frame(), sector_neutral_z(), walk_forward() (+27 more)
+### Community 15 - "backtest_price_composite"
+Cohesion: 0.15
+Nodes (9): backtest_price_composite(), earnings_factor_frame(), _earnings_table(), fundamental_factor_frame(), walk_forward(), evaluate(), weight_presets(), test_factor_backtest_positive_ic() (+1 more)
 
-### Community 16 - "Walk-Forward Engine"
-Cohesion: 0.11
-Nodes (13): gate_grid(), _day(), Fold, folds(), grid(), _neighbours(), pick(), run() (+5 more)
+### Community 16 - "walkforward.py"
+Cohesion: 0.05
+Nodes (38): gate_grid(), best_weights(), correlations(), drawdowns(), _grid(), growth(), load(), mix() (+30 more)
 
-### Community 17 - "sharkfin/playbook.py"
-Cohesion: 0.16
-Nodes (15): plan_view(), best_weights(), correlations(), drawdowns(), _grid(), growth(), load(), mix() (+7 more)
+### Community 17 - "pandas"
+Cohesion: 0.15
+Nodes (20): breakout(), bucket_table(), crash_events(), crash_guards(), dive_zone(), earnings_horizons(), entry_zones(), fear_buyer() (+12 more)
 
 ### Community 18 - "sharkfin/speculation.py"
-Cohesion: 0.14
-Nodes (9): prices(), all_tickers(), Play, radar(), stage(), stage_history(), stats(), Theme (+1 more)
+Cohesion: 0.19
+Nodes (7): Play, radar(), stage(), stage_history(), stats(), Theme, test_speculation_stages_follow_the_price_action()
 
-### Community 19 - "download_prices"
-Cohesion: 0.13
-Nodes (11): index_panel(), market_beta(), peer_table(), sector_etf_prices(), stock_ratings(), scan_data(), download_prices(), earnings_histories() (+3 more)
+### Community 19 - "stock_ratings"
+Cohesion: 0.19
+Nodes (8): index_panel(), peer_table(), sector_etf_prices(), stock_ratings(), zone_study(), infos(), peers_for(), to_gics()
 
 ### Community 20 - "sharkfin/portfolio.py"
-Cohesion: 0.15
-Nodes (13): _cluster_var(), compare_allocations(), efficient_frontier(), expected_returns(), hrp(), max_sharpe(), min_variance(), _portfolio_stats() (+5 more)
+Cohesion: 0.17
+Nodes (11): _cluster_var(), compare_allocations(), efficient_frontier(), expected_returns(), hrp(), max_sharpe(), min_variance(), _portfolio_stats() (+3 more)
 
-### Community 21 - "pandas"
+### Community 21 - "daily_cash"
+Cohesion: 0.15
+Nodes (6): daily_cash(), panel_adx(), panel_atr(), run(), stats(), test_cash_before_the_first_yield_is_not_back_filled()
+
+### Community 22 - "DataFrame"
 Cohesion: 0.12
-Nodes (19): spy_regime(), br_backtest(), ld_backtest(), breakout_tab(), factor_backtest(), leader_dip_run(), alpaca_daily(), history() (+11 more)
+Nodes (13): alpaca_bars(), chunk(), alpaca_daily(), _alpaca_get(), alpaca_keys(), intraday_bars(), latest_trade(), _parse_spells() (+5 more)
 
-### Community 22 - "Membership & Intraday Data"
-Cohesion: 0.13
-Nodes (12): alpaca_bars(), chunk(), _alpaca_get(), alpaca_keys(), intraday_bars(), latest_trade(), _parse_spells(), sec_filings() (+4 more)
-
-### Community 23 - "Breakout Rider Strategy"
-Cohesion: 0.10
-Nodes (15): backtest(), latest(), qqq_gate(), signal_frames(), stock_status(), tech_universe(), walk_forward(), evaluate() (+7 more)
-
-### Community 24 - "Setup Views"
+### Community 23 - "fakes.py"
 Cohesion: 0.15
-Nodes (14): overview(), _fmt(), breakout_setup(), swing_rule_setup(), card(), checklist(), compact_frame(), _finite() (+6 more)
+Nodes (17): _base_info(), download_ohlcv(), download_prices(), earnings_history(), financials(), history(), info(), install() (+9 more)
+
+### Community 24 - "breakout_rider.py"
+Cohesion: 0.23
+Nodes (7): backtest(), latest(), qqq_gate(), signal_frames(), stock_status(), walk_forward(), evaluate()
 
 ### Community 26 - "nq_gex_plays.py"
-Cohesion: 0.13
-Nodes (15): bs(), _call_wall_fade(), catalogue(), _days(), fly_trades(), value(), main(), move_vs_implied() (+7 more)
+Cohesion: 0.10
+Nodes (19): bs(), _call_wall_fade(), catalogue(), _days(), fly_trades(), value(), main(), move_vs_implied() (+11 more)
 
-### Community 27 - "fakes.py"
-Cohesion: 0.15
-Nodes (17): analyst_data(), _base_info(), download_ohlcv(), download_prices(), earnings_history(), financials(), history(), info() (+9 more)
+### Community 27 - "scanner.py"
+Cohesion: 0.13
+Nodes (17): factor_backtest(), get_universe(), leader_dip_tab(), load_scan(), log_prices(), log_signals(), market_close(), ratings_tab() (+9 more)
 
 ### Community 28 - "nq_lab.py"
-Cohesion: 0.15
-Nodes (25): buy_hold(), dip_in_calm(), donchian(), ema(), ema_cross(), ema_pullback(), ema_vix_sized(), gex_pct() (+17 more)
+Cohesion: 0.16
+Nodes (24): buy_hold(), dip_in_calm(), donchian(), ema(), ema_cross(), ema_pullback(), ema_vix_sized(), gex_regime() (+16 more)
 
 ### Community 29 - "Day"
-Cohesion: 0.12
-Nodes (18): bollinger_fade(), bracket(), Day, evaluate(), day_long_only(), day_view(), ema_cross_5m(), _ema_rows() (+10 more)
+Cohesion: 0.16
+Nodes (16): bollinger_fade(), bracket(), Day, evaluate(), day_long_only(), ema_cross_5m(), _ema_rows(), _filter() (+8 more)
 
 ### Community 30 - "Strategy Lab"
-Cohesion: 0.22
-Nodes (8): build_tab(), condition_rows(), lab_walk_forward(), _load(), _remove(), rules_key(), split_open_trade(), _value_step()
+Cohesion: 0.24
+Nodes (8): _add(), build_tab(), condition_rows(), _load(), _remove(), rules_key(), split_open_trade(), _value_step()
 
 ### Community 31 - "levels.py"
 Cohesion: 0.22
@@ -228,32 +245,32 @@ Cohesion: 0.11
 Nodes (17): Data: what was real and what was approximated, Day-trade results (test years Apr 2019 to Oct 2026), Does GEX shrink the day? Yes, Fear day long, checked, How the backtests avoid leakage, How the strategies that held up work, NQ strategy lab: results (October 2026), Part 2: GEX and VIX as a daily playbook (+9 more)
 
 ### Community 33 - "sharkfin/__init__.py"
-Cohesion: 0.09
-Nodes (4): pct(), stage_pill(), updown(), reload_changed_sharkfin()
+Cohesion: 0.10
+Nodes (3): stat(), tile(), reload_changed_sharkfin()
 
-### Community 34 - "test_leaks.py"
-Cohesion: 0.32
-Nodes (4): offline(), _panel(), test_a_stock_that_stops_trading_sells_when_that_is_known(), test_limit_fill_and_target_on_the_same_bar_do_not_both_count()
+### Community 34 - "_cached_panel"
+Cohesion: 0.17
+Nodes (11): _cached_panel(), _earnings_fresh(), _earnings_from_disk(), _earnings_to_disk(), _panel_file(), _panel_load(), _panel_save(), _patched() (+3 more)
 
-### Community 35 - "research.py"
-Cohesion: 0.24
-Nodes (4): api_key(), available(), _default(), stream_report()
+### Community 35 - "market_today.py"
+Cohesion: 0.19
+Nodes (7): breadth(), direction(), macro_drivers(), move_z(), _ret(), sector_leaders(), street_view()
 
-### Community 36 - "_cached_panel"
+### Community 36 - "research.py"
 Cohesion: 0.15
-Nodes (13): _cached_panel(), _earnings_fresh(), _earnings_from_disk(), earnings_history(), _earnings_to_disk(), info(), _panel_file(), _panel_load() (+5 more)
+Nodes (13): run_forecast(), lab_walk_forward(), analyst_data(), earnings_history(), financials(), history(), industry_members(), info() (+5 more)
 
 ### Community 37 - "load_scan"
 Cohesion: 0.20
-Nodes (5): load_scan(), prefetch(), deco(), cached(), test_prefetch_skips_cached_reports_progress_and_stops_on_interrupt()
+Nodes (7): _is_empty(), prefetch(), deco(), cached(), wrapper(), fresh(), test_prefetch_skips_cached_reports_progress_and_stops_on_interrupt()
 
-### Community 38 - "numpy"
-Cohesion: 0.13
-Nodes (16): trailing_pct(), cut(), make_ohlcv(), ohlcv(), price_panel(), _market(), _settings(), _signal() (+8 more)
+### Community 38 - "pathlib"
+Cohesion: 0.38
+Nodes (3): make_ohlcv(), ohlcv(), price_panel()
 
-### Community 39 - "home.py"
-Cohesion: 0.29
-Nodes (4): load_overview(), playbook_rows(), tile(), summary_rows()
+### Community 39 - "drivers.py"
+Cohesion: 0.21
+Nodes (7): drivers(), earnings_record(), estimate_trend(), _naive(), _num(), _tone(), test_drivers_earnings_record_and_estimates()
 
 ### Community 40 - "MCP Servers"
 Cohesion: 0.50
@@ -263,45 +280,77 @@ Nodes (3): alphavantage, context7, firecrawl
 Cohesion: 0.67
 Nodes (4): SharkFin Brand Identity (finance / stock-gains theme), SharkFin Logo, Shark Fin Over Waves Icon, SharkFin Wordmark (rising chart line in 'i')
 
-### Community 42 - "opex_days"
-Cohesion: 0.43
-Nodes (3): opex_days(), opex_week(), test_opex_is_the_third_friday_or_the_day_before_a_holiday()
+### Community 42 - "day_view"
+Cohesion: 0.33
+Nodes (4): atr(), day_view(), gex_pct(), known()
 
-### Community 43 - "Series"
-Cohesion: 0.17
-Nodes (6): known(), night_returns(), overnight_hold(), rotation(), evaluate(), swing_returns()
+### Community 43 - "json"
+Cohesion: 0.20
+Nodes (11): swing_tab(), choices(), _load(), my_swing_rules(), _path(), save_list(), save_my_swing_rules(), save_state() (+3 more)
 
 ### Community 44 - "Series"
-Cohesion: 0.10
-Nodes (11): atr(), deflated_sharpe(), fetch(), first_usable(), _folds_beating_cash(), intraday_frames(), load(), main() (+3 more)
+Cohesion: 0.13
+Nodes (10): deflated_sharpe(), first_usable(), _folds_beating_cash(), main(), night_returns(), overnight_hold(), rotation(), run_one() (+2 more)
 
-### Community 47 - "_intraday_ttl"
+### Community 47 - "test_core.py"
+Cohesion: 0.15
+Nodes (13): fair_value_summary(), _earn_table(), _panel(), test_drawdown_simple(), test_earnings_factors_use_only_past_reports(), test_fair_value_blend(), test_features_have_no_lookahead(), test_leader_dip_idle_cash_choices() (+5 more)
+
+### Community 48 - "test_leaks.py"
+Cohesion: 0.21
+Nodes (7): headline_drivers(), offline(), _panel(), test_a_stock_that_stops_trading_sells_when_that_is_known(), test_limit_fill_and_target_on_the_same_bar_do_not_both_count(), test_negative_shifts_are_only_trade_outcomes(), test_nothing_is_back_filled()
+
+### Community 49 - "nq_regimes.py"
+Cohesion: 0.12
+Nodes (17): _allowed(), _bands(), catalogue(), cell_names(), _cut(), day_matrix(), day_router(), fear_bounce() (+9 more)
+
+### Community 50 - "factors.py"
+Cohesion: 0.29
+Nodes (7): composite_scores(), price_factor_frame(), sector_neutral_z(), winsorize(), zscore(), test_composite_adds_earnings_theme_and_drops_zero_weight_themes(), test_factor_composite_ranks_planted_winners()
+
+### Community 52 - "Results"
+Cohesion: 0.18
+Nodes (10): Caveats, Entry ranges, Growth lab (Nov 2026), Results, Rules, Strategies (graded Oct 2021 to Nov 6 2026), Strategy Lab starting points, Tested and not adopted (+2 more)
+
+### Community 58 - "sentiment.py"
+Cohesion: 0.13
+Nodes (13): could_run_tab(), aggregate_sentiment(), BM25, dedupe(), hours_old(), is_noise(), label(), rank_articles() (+5 more)
+
+### Community 59 - "load"
+Cohesion: 0.18
+Nodes (4): fetch(), intraday_frames(), load(), trailing_pct()
+
+### Community 60 - "targets.py"
+Cohesion: 0.29
+Nodes (4): entry_range(), _ok(), price_target(), rsi_pullback_price()
+
+### Community 61 - "_intraday_ttl"
 Cohesion: 0.40
 Nodes (3): _intraday_ttl(), test_intraday_cache_is_short_while_the_market_is_open(), f()
 
-### Community 49 - "nq_regimes.py"
-Cohesion: 0.11
-Nodes (18): _allowed(), _bands(), catalogue(), cell_names(), _cut(), day_matrix(), day_router(), fear_bounce() (+10 more)
+### Community 62 - "_fetch_prices"
+Cohesion: 0.50
+Nodes (4): _fetch_ohlcv(), _fetch_prices(), fetch(), _naive()
 
 ## Knowledge Gaps
 - **8 isolated node(s):** `Core Longs Screen`, `Could Run Screen`, `GARCH(1,1) Filtered Historical Simulation`, `Strategy Returns Research Data`, `Valuation Lab (DCF, Reverse DCF, Monte Carlo DCF)` (+3 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 421 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **3 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 469 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **22 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `run()` connect `Walk-Forward Engine` to `run`, `Strategy Builder & Swing`, `numpy`, `Leader Dip Strategy`, `day_night.py`, `Series`, `test_core.py`, `pandas`, `Breakout Rider Strategy`?**
-  _High betweenness centrality (0.034) - this node is a cross-community bridge._
-- **Are the 2 inferred relationships involving `Financials` (e.g. with `financials()` and `quarterly_financials()`) actually correct?**
-  _`Financials` has 2 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `run()` connect `walkforward.py` to `run`, `Strategy Builder & Swing`, `leader_dip.py`, `day_night.py`, `Series`, `backtest_price_composite`, `pandas`, `breakout_rider.py`?**
+  _High betweenness centrality (0.027) - this node is a cross-community bridge._
 - **What connects `Core Longs Screen`, `Could Run Screen`, `GARCH(1,1) Filtered Historical Simulation` to the rest of the system?**
   _8 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Valuation & Quality Scores` be split into smaller, more focused modules?**
-  _Cohesion score 0.06416275430359937 - nodes in this community are weakly interconnected._
-- **Why does `How the backtests avoid leakage` connect `run` to `Walk-Forward Engine`?**
-  _High betweenness centrality (0.031) - this node is a cross-community bridge._
-- **Should `ratings.py` be split into smaller, more focused modules?**
-  _Cohesion score 0.09059233449477352 - nodes in this community are weakly interconnected._
-- **Should `streamlit` be split into smaller, more focused modules?**
-  _Cohesion score 0.14492753623188406 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.0609009009009009 - nodes in this community are weakly interconnected._
+- **Why does `How the backtests avoid leakage` connect `run` to `walkforward.py`?**
+  _High betweenness centrality (0.021) - this node is a cross-community bridge._
+- **Should `h` be split into smaller, more focused modules?**
+  _Cohesion score 0.11764705882352941 - nodes in this community are weakly interconnected._
+- **Should `Strategy Builder & Swing` be split into smaller, more focused modules?**
+  _Cohesion score 0.06144393241167435 - nodes in this community are weakly interconnected._
+- **Should `App Pages & Landing Animation` be split into smaller, more focused modules?**
+  _Cohesion score 0.062040816326530614 - nodes in this community are weakly interconnected._

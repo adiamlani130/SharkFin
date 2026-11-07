@@ -1,4 +1,4 @@
-"""Which swing strategy the app uses: Leader Dip Plus 7 by default, Tech Breakout Rider, a Strategy Lab template,
+"""Which swing strategy the app uses: Dive Zone by default, Tech Breakout Rider, a Strategy Lab template,
 or the user's own rules.
 
 The two researched strategies have their own modules (``leader_dip`` and ``breakout_rider``: they rank stocks
@@ -13,13 +13,12 @@ import pandas as pd
 
 from . import builder
 
-LEADER_DIP = "Leader Dip Plus 7"
+LEADER_DIP = "Dive Zone"
 BREAKOUT = "Tech Breakout Rider"
 RESEARCHED = (LEADER_DIP, BREAKOUT)
 MINE = "My Strategy Lab strategy"
-# Templates that trade in and out over days to weeks (the long-hold trend templates are left out).
-TEMPLATE_CHOICES = ["RSI dip in an uptrend", "Bollinger bounce", "Pullback in an uptrend", "Volume breakout",
-                    "MACD momentum", "55-day breakout"]
+# Strategy Lab templates offered as swing strategies (none: the ready-made templates are long-hold trend filters).
+TEMPLATE_CHOICES: list[str] = []
 ABOUT = {
     LEADER_DIP: "SharkFin's researched default. Buys a sharp two-day drop in one of the S&P 500's strongest stocks "
                 "while the market is in an uptrend and sells into the bounce, usually within a week. 33% a year with a "
@@ -29,7 +28,7 @@ ABOUT = {
               "a year over the last 5 years in SharkFin's research, with bigger swings.",
     MINE: "The rules you saved from Strategy Lab → Build and test.",
 }
-NOTE_UNTESTED = ("This strategy has not been through SharkFin's portfolio research (Leader Dip Plus 7 and Tech Breakout "
+NOTE_UNTESTED = ("This strategy has not been through SharkFin's portfolio research (Dive Zone and Tech Breakout "
                  "Rider have). The backtest "
                  "below shows how it would have traded this one stock.")
 

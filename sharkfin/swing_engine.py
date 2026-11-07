@@ -1,4 +1,4 @@
-"""The portfolio engine behind SharkFin's swing systems (Leader Dip Plus and Tech Breakout Rider).
+"""The portfolio engine behind SharkFin's swing systems (Dive Zone and Tech Breakout Rider).
 
 A fixed number of equal slots. Signals are read at the close of day t and act on day t+1:
 

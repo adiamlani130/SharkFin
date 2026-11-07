@@ -1,14 +1,15 @@
-"""The Strategy Playbook: SharkFin's three researched strategies and how they combine.
+"""The Strategy Playbook: SharkFin's two researched strategies, Dive Zone (swing, days) and Tech Breakout Rider
+(trend, weeks to months), and how they combine.
 
-The research (Oct 2026) replayed each strategy on point-in-time data: Leader Dip Plus 7 and Tech Breakout Rider
-on the stocks that were actually in the S&P 500 on each date, the TQQQ pair on 1-minute bars. Their daily
-returns since 2016 ship with the app (``research_data/strategy_returns.csv``), so the combined plan can be
-re-weighted and re-tested here without downloading anything. Settings and weights were picked on 2016 - Oct
-2021 data and graded on the five years after (Oct 2021 - Oct 2026).
+The Nov 2026 growth lab (``growth_lab.py``) replayed both on point-in-time data: the stocks that were actually in
+the S&P 500 on each date, 0.1% cost per side, through Nov 6 2026 (so the Oct-Nov 2026 tech selloff is in). Their
+daily returns since 2006 ship with the app (``research_data/growth_returns.csv``), so the page needs no download.
+The picking window is 2006 - Oct 2021; Oct 2021 - Nov 2026 is the out-of-sample grade. Sharpe ratios are after
+T-bills.
 
-Mixes rebalance to their target weights at the start of each month. As in the research's combined grade, the TQQQ
-sleeve earns nothing outside its trades (no interest is credited on its idle cash), so its numbers are slightly
-conservative. Sharpe ratios are measured after T-bills.
+The TQQQ Day + Night pair left the playbook in Nov 2026: SharkFin is aimed at mid-to-long-term growth investing,
+and a day-trading edge of 0.2-0.3% a trade that needs a check every 30 minutes doesn't fit it. Its code stays in
+``day_night.py``.
 """
 
 from __future__ import annotations
@@ -20,54 +21,41 @@ import pandas as pd
 
 from . import walkforward
 
-DATA = Path(__file__).with_name("research_data") / "strategy_returns.csv"
-PICK = ("2016-01-04", "2021-10-12")
-GRADE = ("2021-10-13", "2026-10-12")
+DATA = Path(__file__).with_name("research_data") / "growth_returns.csv"
+PICK = ("2006-01-03", "2021-10-12")
+GRADE = ("2021-10-13", "2026-11-06")
 
-LD, BR, DN = "Leader Dip Plus 7", "Tech Breakout Rider", "TQQQ Day + Night"
-COLUMNS = {LD: "leader_dip_plus7", BR: "tech_breakout_rider", DN: "tqqq_day_night",
-           "Classic Leader Dip": "leader_dip_classic", "TQQQ day leg": "tqqq_day", "TQQQ night leg": "tqqq_night",
-           "S&P 500 (SPY)": "spy", "Nasdaq-100 (QQQ)": "qqq"}
-INTRADAY: set = set()  # sleeves credited T-bill interest on idle cash (none, matching the research grade)
-WEIGHTS = {LD: 0.5, BR: 0.2, DN: 0.3}
-COLORS = {LD: "#2dd4a3", BR: "#4ea8ff", DN: "#a78bfa", "The plan": "#f5a524", "S&P 500 (SPY)": "#8b95a7",
+LD, BR = "Dive Zone", "Tech Breakout Rider"
+COLUMNS = {LD: "dive_zone", BR: "tech_breakout_rider", "S&P 500 (SPY)": "spy", "Nasdaq-100 (QQQ)": "qqq"}
+WEIGHTS = {LD: 0.7, BR: 0.3}
+COLORS = {LD: "#2dd4a3", BR: "#4ea8ff", "Both (70 / 30)": "#f5a524", "S&P 500 (SPY)": "#8b95a7",
           "Nasdaq-100 (QQQ)": "#5f6b7d"}
 
-# Graded on Oct 2021 - Oct 2026 in the research (trade stats from the research's own trade lists). Settings were
-# picked on earlier data, so this window is out of sample: one walk-forward step. Sharpe ratios are after T-bills
-# (the legs' 1.06 / 0.66 quoted earlier were before T-bills). The night leg decided on the 16:00 close, which
-# can't be traded, so its numbers are somewhat optimistic; the app's own night leg decides at 15:30.
+# Graded on Oct 13 2021 - Nov 6 2026 (out of sample; trade stats from the lab's own trade lists).
 FACTS = {
-    LD: {"return": 0.331, "sharpe": 1.40, "worst": -0.18, "win": 0.64, "edge": 0.017, "avg_win": 0.054,
-         "avg_loss": -0.050, "payoff": 1.07, "pf": 1.92, "trades_yr": 96, "hold": "5 days", "y2022": -0.057,
-         "older": "16.5% a year in 2000-12 (worst drop 20%)", "stress": "28.7% a year, Sharpe 1.20, with fills 0.25% worse"},
-    BR: {"return": 0.338, "sharpe": 1.09, "worst": -0.29, "win": 0.49, "edge": 0.119, "avg_win": 0.36,
-         "avg_loss": -0.115, "payoff": 3.1, "pf": 3.05, "trades_yr": 29, "hold": "about 2 months", "y2022": -0.248,
-         "older": "7.3% a year in 2000-12", "stress": "about 15% a year without its 5 best stocks; nearby settings 27%"},
-    DN: {"return": 0.346, "sharpe": 1.06, "worst": -0.30, "win": None, "edge": None, "trades_yr": 158, "hold": "hours / overnight",
-         "y2022": 0.194, "older": "32% a year in 2016-21, when the settings were picked",
-         "stress": "the edge is 0.2-0.3% a trade, so every 0.1% of extra slippage costs a third of it",
-         "legs": {"Day": {"return": 0.201, "sharpe": 0.86, "worst": -0.13, "win": 0.46, "edge": 0.0018, "avg_win": 0.0139,
-                          "avg_loss": -0.0085, "trades_yr": 109},
-                  "Night": {"return": 0.121, "sharpe": 0.47, "worst": -0.34, "win": 0.57, "edge": 0.0028, "avg_win": 0.0207,
-                            "avg_loss": -0.0210, "trades_yr": 49}}},
-    "S&P 500 (SPY)": {"return": 0.139, "sharpe": 0.63, "worst": -0.25, "y2022": -0.182},
-    "Nasdaq-100 (QQQ)": {"return": 0.165, "sharpe": 0.61, "worst": -0.35, "y2022": -0.326},
-    "The plan": {"return": 0.354, "sharpe": 1.60, "worst": -0.18, "y2022": -0.020},
+    LD: {"return": 0.276, "sharpe": 1.13, "worst": -0.225, "win": 0.64, "edge": 0.015, "avg_win": 0.054,
+         "avg_loss": -0.055, "payoff": 0.99, "pf": 1.74, "trades_yr": 98, "hold": "5 days", "y2022": -0.065,
+         "nov2026": -0.204, "older": "16.2% a year in 2006-12, worst drop 18%, while SPY lost half in 2008",
+         "stress": "18.8% a year, Sharpe 0.77, with fills 0.25% worse on every buy and sell",
+         "before_crash": "34.1% a year, Sharpe 1.43, worst drop 18% (to Oct 12 2026)"},
+    BR: {"return": 0.289, "sharpe": 0.95, "worst": -0.306, "win": 0.48, "edge": 0.111, "avg_win": 0.36,
+         "avg_loss": -0.118, "payoff": 3.0, "pf": 2.80, "trades_yr": 29, "hold": "about 3 months", "y2022": -0.262,
+         "nov2026": -0.133, "older": "4.7% a year in 2006-12",
+         "stress": "8.6% a year without its 5 best stocks (SNDK, STX, NVDA, PLTR, MU)",
+         "before_crash": "33.2% a year, Sharpe 1.07 (to Oct 12 2026)"},
+    "S&P 500 (SPY)": {"return": 0.125, "sharpe": 0.56, "worst": -0.245, "y2022": -0.182, "nov2026": -0.055},
+    "Nasdaq-100 (QQQ)": {"return": 0.135, "sharpe": 0.50, "worst": -0.351, "y2022": -0.326, "nov2026": -0.121},
+    "Both (70 / 30)": {"return": 0.290, "sharpe": 1.20, "worst": -0.197, "y2022": -0.125},
 }
 
 
 def load() -> pd.DataFrame:
-    """Daily returns since 2016 (columns as in ``COLUMNS``, plus the daily T-bill rate ``tbill``)."""
-    d = pd.read_csv(DATA, index_col=0, parse_dates=True)
-    return d
+    """Daily returns since 2006 (columns as in ``COLUMNS``, plus the daily T-bill rate ``tbill``)."""
+    return pd.read_csv(DATA, index_col=0, parse_dates=True)
 
 
 def sleeve(d: pd.DataFrame, name: str) -> pd.Series:
-    """One strategy's daily returns (columns in ``INTRADAY`` also earn T-bill interest on idle cash)."""
-    col = COLUMNS.get(name, name)
-    r = d[col]
-    return r + d["tbill"].where(r.notna()) if col in INTRADAY else r
+    return d[COLUMNS.get(name, name)]
 
 
 def mix(d: pd.DataFrame, weights: dict, start=None, end=None) -> pd.Series:
@@ -120,21 +108,20 @@ def drawdowns(series: dict, start=GRADE[0], end=None) -> pd.DataFrame:
 
 
 def split(amount: float, weights: dict = WEIGHTS) -> dict:
-    """How ``amount`` divides across the sleeves, and the size of one position in each."""
+    """How ``amount`` divides across the strategies, and the size of one position in each."""
     from . import breakout_rider, leader_dip
 
     tot = sum(weights.values()) or 1.0
     out = {}
     for k, w in weights.items():
         sl = amount * w / tot
-        per = {LD: sl / leader_dip.SLOTS, BR: sl / breakout_rider.SLOTS, DN: sl}.get(k, sl)
+        per = {LD: sl / leader_dip.SLOTS, BR: sl / breakout_rider.SLOTS}.get(k, sl)
         out[k] = {"weight": w / tot, "sleeve": sl, "position": per}
     return out
 
 
-def best_weights(d: pd.DataFrame, names=(LD, BR, DN), step: float = 0.1, start=PICK[0], end=PICK[1]) -> dict:
-    """The weights (in ``step`` increments) with the highest Sharpe on the picking window, as the research did
-    (a plain daily-weighted blend for the search, monthly rebalancing for the grade)."""
+def best_weights(d: pd.DataFrame, names=(LD, BR), step: float = 0.1, start=PICK[0], end=PICK[1]) -> dict:
+    """The weights (in ``step`` increments) with the highest Sharpe on the picking window."""
     X = pd.DataFrame({k: sleeve(d, k) for k in names}).loc[start:end].dropna()
     rf = d["tbill"].reindex(X.index)
     k = int(round(1 / step))
@@ -157,18 +144,13 @@ def _grid(n: int, k: int):
             yield (i, *rest)
 
 
-def correlations(d: pd.DataFrame, names=(LD, BR, DN, "S&P 500 (SPY)"), start=GRADE[0], end=GRADE[1],
-                 down_days: bool = False) -> pd.DataFrame:
-    X = pd.DataFrame({k: sleeve(d, k) for k in names}).loc[start:end]
-    if down_days:
-        X = X[d["spy"].reindex(X.index) < -0.01]
-    return X.corr()
+def correlations(d: pd.DataFrame, names=(LD, BR, "S&P 500 (SPY)"), start=GRADE[0], end=GRADE[1]) -> pd.DataFrame:
+    return pd.DataFrame({k: sleeve(d, k) for k in names}).loc[start:end].corr()
 
 
-def walk_forward_mix(d: pd.DataFrame, names=(LD, BR, DN), step: float = 0.1) -> dict:
-    """The mix with its weights re-picked every year on the three years before it (the best Sharpe, as
-    ``best_weights`` does), then held for that year. Only the strategies' weights are re-picked here: each
-    strategy's own settings come from the research and were chosen on 2016-21."""
+def walk_forward_mix(d: pd.DataFrame, names=(LD, BR), step: float = 0.1) -> dict:
+    """The mix with its weights re-picked every year on the three years before it (the best Sharpe), then held
+    for that year."""
     X = pd.DataFrame({k: sleeve(d, k) for k in names}).dropna()
     pieces, rows = [], []
     for f in walkforward.folds(X.index):

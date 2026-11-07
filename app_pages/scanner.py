@@ -117,7 +117,7 @@ def factor_backtest(symbols: tuple, weights: tuple, with_earnings: bool, point_i
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def sp500_gains() -> pd.Series:
-    """Every S&P 500 stock's 6-month gain: the yardstick for Leader Dip's strength rank."""
+    """Every S&P 500 stock's 6-month gain: the yardstick for Dive Zone's strength rank."""
     sp = data.download_prices(tuple(data.universe("S&P 500")), period="2y")
     return leader_dip.six_month_gain(sp.ffill()).iloc[-1].dropna() if not sp.empty else pd.Series(dtype=float)
 
@@ -218,7 +218,7 @@ def log_signals(today: pd.DataFrame, asof, market_ok: bool | None):
 
 def leader_dip_tab():
     st.markdown(
-        "<div class='sf-note'><b>Leader Dip Plus 7</b> buys a sharp two-day drop in one of the market's strongest "
+        "<div class='sf-note'><b>Dive Zone</b> buys a sharp two-day drop in one of the market's strongest "
         "stocks and sells into the bounce. A stock signals when its <b>2-day RSI is below 10</b>, it is <b>above its "
         "200-day average</b>, its <b>6-month gain beats 70% of the S&amp;P 500</b>, and it has at least one "
         f"<b>quality point</b>. {ui.h(leader_dip.QUALITY_RULE)} {ui.h(leader_dip.ENTRY_RULE)} "
@@ -238,11 +238,11 @@ def leader_dip_tab():
     if switch is False:
         st.warning("Market switch is **off**: SPY closed below its 200-day average and VIX is under 25, so the system "
                    "places no new trades. Signals below are for reference only.")
-    st.caption(f"Signals at the {asof:%b %d, %Y} close, strongest first. Leader Dip Plus 7 holds up to "
+    st.caption(f"Signals at the {asof:%b %d, %Y} close, strongest first. Dive Zone holds up to "
                f"{leader_dip.SLOTS} trades at once, so with more signals than free slots, take them from the top. Idle "
                "cash sits in SPY while SPY is above its 200-day.")
     if sig.empty:
-        st.info("No stock in this list signalled at the last close. Leader Dip fires on only a few stocks a week, and "
+        st.info("No stock in this list signalled at the last close. Dive Zone fires on only a few stocks a week, and "
                 "less often in calm, rising markets.")
     else:
         if switch is not False:

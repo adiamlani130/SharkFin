@@ -174,6 +174,23 @@ button:focus-visible, a:focus-visible {outline: 2px solid #8fcdf2 !important; ou
 .sf-steps {margin: 8px 0 0 0; padding-left: 1.2rem; font-size: .88rem; color: #b4c4d1; line-height: 1.6;}
 .sf-steps li {margin-bottom: 6px;} .sf-steps b {color: #e4edf3;}
 
+/* ---------- market dashboard: today ---------- */
+.sf-today {background: #0b1824; border: 1px solid #152738; border-left: 3px solid var(--c, #3fa9e0); border-radius: 12px;
+  padding: 16px 18px; margin: .2rem 0 .8rem;}
+.sf-today .hd {display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;}
+.sf-today .lb {font-size: 1.35rem; font-weight: 600; color: #eef4f7; letter-spacing: -0.01em;}
+.sf-today .tx {color: #b4c4d1; font-size: .92rem; line-height: 1.6; margin-top: 6px;}
+.sf-today .st {display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .6rem 1.4rem; margin-top: 12px;
+  font-variant-numeric: tabular-nums;}
+@container (max-width: 700px) {.sf-today .st {grid-template-columns: repeat(2, minmax(0, 1fr));}}
+.sf-today .st div {border-top: 1px solid #152738; padding-top: 8px;}
+.sf-today .st .k {color: #8599ab; font-size: .76rem;} .sf-today .st .v {color: #eef4f7; font-size: 1.05rem; font-weight: 500;}
+.sf-today .st .s {color: #8599ab; font-size: .74rem;}
+.sf-drivers {display: grid; gap: 8px; margin-top: 12px;}
+.sf-driver {display: flex; gap: 10px; align-items: baseline; font-size: .88rem; color: #b4c4d1; line-height: 1.5;}
+.sf-driver .sf-pill {flex: 0 0 auto; min-width: 92px; text-align: center;}
+.sf-driver q {color: #8599ab; font-size: .8rem;}
+
 /* ---------- speculation radar ---------- */
 .sf-themes {display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .8rem; margin: .3rem 0 1rem;}
 @container (max-width: 1000px) {.sf-themes {grid-template-columns: repeat(2, minmax(0, 1fr));}}
@@ -269,6 +286,17 @@ html {scroll-behavior: smooth;}
 def setup():
     st.markdown(CSS, unsafe_allow_html=True)
     init_state()
+
+
+def fetch_all(jobs: list, workers: int = 8) -> None:
+    """Warm the data cache for many calls at once (see ``data.prefetch``), keeping the page interruptible.
+
+    Streamlit can only stop a running page when the page touches Streamlit, so a page that sat inside a long
+    download ignored clicks on other pages until the download finished. This touches an empty placeholder about
+    once a second while it waits: a page switch stops the wait right away, and the downloads still running finish
+    in the background and stay cached for the next visit."""
+    beat = st.empty()
+    data.prefetch(jobs, workers=workers, progress=lambda done, total: beat.empty())
 
 
 def asset(name: str) -> str:
@@ -505,7 +533,7 @@ def init_state():
 
 
 def load_list(name: str) -> list:
-    """A list saved next to the portfolio and watchlist (e.g. the Leader Dip signal log)."""
+    """A list saved next to the portfolio and watchlist (e.g. the Dive Zone signal log)."""
     return _load(name)
 
 
@@ -567,7 +595,7 @@ def swing_picker(key: str) -> str:
     if st.session_state.get(wkey) not in opts:
         st.session_state[wkey] = current
     return st.selectbox("Swing strategy", opts, key=wkey, on_change=lambda: set_swing_choice(st.session_state[wkey]),
-                        help="Leader Dip is SharkFin's tested default. Pick a Strategy Lab template, or save your own "
+                        help="Dive Zone is SharkFin's tested default. Pick a Strategy Lab template, or save your own "
                              "rules in Strategy Lab → Build and test → Use as my swing strategy. The choice applies on "
                              "Top Performers and Research.")
 

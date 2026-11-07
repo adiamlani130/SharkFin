@@ -336,40 +336,28 @@ def C(ind_: str, op: str, rhs: str = VALUE, value: float = 0.0, n: int | None = 
             "value": float(value), "lookback": lookback}
 
 
+# The ready-made strategies. SharkFin's Nov 2026 test (walk-forward on 24 stocks and ETFs since 2000, 5 bps a
+# trade) kept only the ones that come close to buying and holding: buy and hold made 16.4% a year at the median
+# (worst drop 65%); the 200-day filters, the golden cross and 12-month momentum made about 12% with drops of 37-49%.
+# RSI dips, Bollinger bounces, MACD, stochastic pullbacks and 20/55-day breakouts made 4-7% a year, so they are
+# left for people to build themselves.
 TEMPLATES: dict[str, dict] = {
+    "Buy and hold": {
+        "about": "Buy on day one and never sell. The yardstick every other strategy has to beat, and in SharkFin's "
+                 "tests most don't.",
+        "logic": "ALL", "entry": [C("Price", "is above", value=0)], "exit": [C("Price", "is below", value=0)]},
+    "Above the 200-day EMA": {
+        "about": "Own the stock while it closes above its 200-day exponential average, cash otherwise. In SharkFin's "
+                 "tests it gave up about 4 points a year to buying and holding but cut the worst drops by a third.",
+        "logic": "ALL", "entry": [C("Price", "is above", "EMA", rn=200)], "exit": [C("Price", "is below", "EMA", rn=200)]},
     "Golden cross": {
-        "about": "The classic long-term trend signal: own the stock while the 50-day average is above the 200-day.",
-        "logic": "ALL", "entry": [C("SMA", "crosses above", "SMA", n=50, rn=200)],
-        "exit": [C("SMA", "crosses below", "SMA", n=50, rn=200)]},
-    "Above the 200-day": {
-        "about": "The simplest trend filter there is. Historically it gave up some return but avoided most of the big crashes.",
-        "logic": "ALL", "entry": [C("Price", "is above", "SMA", rn=200)], "exit": [C("Price", "is below", "SMA", rn=200)]},
-    "RSI dip in an uptrend": {
-        "about": "Buy short, sharp pullbacks in stocks that are still in a long-term uptrend, sell into the bounce.",
-        "logic": "ALL", "entry": [C("RSI", "is below", value=35), C("Price", "is above", "SMA", rn=200)],
-        "exit": [C("RSI", "is above", value=55)], "stop": 10.0, "max_days": 30},
-    "MACD momentum": {
-        "about": "Ride momentum when the MACD turns up, but only while the long-term trend is up.",
-        "logic": "ALL", "entry": [C("MACD line", "crosses above", "MACD signal"), C("Price", "is above", "SMA", rn=200)],
-        "exit": [C("MACD line", "crosses below", "MACD signal")], "stop": 8.0},
-    "55-day breakout": {
-        "about": "The Turtle traders' rule: buy when price makes a new 55-day high, sell on a new 20-day low.",
-        "logic": "ALL", "entry": [C("Price", "is above", "N-day high", rn=55)],
-        "exit": [C("Price", "is below", "N-day low", rn=20)]},
-    "Bollinger bounce": {
-        "about": "Buy when price snaps back inside the lower Bollinger band in an uptrend; sell at the middle band.",
-        "logic": "ALL", "entry": [C("Price", "crosses above", "Bollinger lower", rn=20), C("Price", "is above", "SMA", rn=200)],
-        "exit": [C("Price", "is above", "Bollinger middle", rn=20)], "stop": 8.0, "max_days": 30},
-    "Pullback in an uptrend": {
-        "about": "Wait for the 50-day to be above the 200-day, then buy when the stochastic turns up from oversold.",
-        "logic": "ALL", "entry": [C("SMA", "is above", "SMA", n=50, rn=200), C("Stochastic %K", "crosses above", value=20)],
-        "exit": [C("Stochastic %K", "is above", value=80)], "stop": 7.0, "max_days": 30},
-    "Volume breakout": {
-        "about": "A new 20-day high on at least 1.5x normal volume, exiting when price loses the 20-day EMA.",
-        "logic": "ALL", "entry": [C("Price", "is above", "N-day high", rn=20), C("Relative volume", "is above", value=1.5)],
-        "exit": [C("Price", "is below", "EMA", rn=20)], "stop": 8.0},
+        "about": "The best-known trend signal on Wall Street: own the stock while its 50-day average is above its "
+                 "200-day, step aside when it crosses under (a 'death cross').",
+        "logic": "ALL", "entry": [C("SMA", "is above", "SMA", n=50, rn=200)],
+        "exit": [C("SMA", "is below", "SMA", n=50, rn=200)]},
     "12-month momentum": {
-        "about": "Hold the stock while it is up over the past year (time-series momentum, Moskowitz, Ooi & Pedersen 2012).",
+        "about": "Hold the stock while it is up over the past year, cash when it is down (time-series momentum, "
+                 "Moskowitz, Ooi & Pedersen 2012). Slow, rarely trades, and sidesteps long bear markets.",
         "logic": "ALL", "entry": [C("Return over N days %", "is above", value=0, n=252)],
         "exit": [C("Return over N days %", "is below", value=0, n=252)]},
     "Start from scratch": {

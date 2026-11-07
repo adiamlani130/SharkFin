@@ -480,8 +480,12 @@ def test_builder_templates_run_and_describe():
         assert np.isfinite(r["stats"]["Return per year"])
         assert len(r["equity"]) == len(r["bh_equity"])
     buy, sell = builder.describe_strategy(builder.template("Golden cross"))
-    assert buy == "SMA(50) crosses above SMA(200)" and sell == "SMA(50) crosses below SMA(200)"
-    runs = builder.compare_templates(d, ["Golden cross", "55-day breakout"], 5, 0.0)
+    assert buy == "SMA(50) is above SMA(200)" and sell == "SMA(50) is below SMA(200)"
+    assert set(builder.TEMPLATES) == {"Buy and hold", "Above the 200-day EMA", "Golden cross", "12-month momentum",
+                                      "Start from scratch"}
+    hold = builder.run(d, builder.template("Buy and hold"), 0, 0.0)
+    assert hold["stats"]["Trades"] <= 1 and hold["stats"]["Time in market"] > 0.95
+    runs = builder.compare_templates(d, ["Golden cross", "12-month momentum"], 5, 0.0)
     a, b = runs.values()
     assert a["equity"].index[0] == b["equity"].index[0]
 
@@ -543,12 +547,14 @@ def test_swing_choice_rules_and_status(ohlcv):
     from sharkfin import builder, swing
     assert swing.choices()[0] == swing.LEADER_DIP and swing.MINE not in swing.choices()
     assert swing.rules(swing.LEADER_DIP) is None
-    mine = builder.template("RSI dip in an uptrend")
+    rsi_dip = {"logic": "ALL", "entry": [builder.C("RSI", "is below", value=35), builder.C("Price", "is above", "SMA", rn=200)],
+               "exit": [builder.C("RSI", "is above", value=55)], "stop": 10.0, "max_days": 30}
+    mine = swing.clean(rsi_dip)
     mine["entry"][0]["id"] = 123
     cleaned = swing.clean(mine)
     assert "id" not in cleaned["entry"][0] and swing.MINE in swing.choices(cleaned)
     assert swing.rules(swing.MINE, cleaned) == cleaned
-    st_ = swing.stock_status(ohlcv, swing.rules("RSI dip in an uptrend"))
+    st_ = swing.stock_status(ohlcv, swing.rules(swing.MINE, cleaned))
     assert st_["label"] in {"In a trade", "Buy signal", "Sell signal", "No signal"}
     assert st_["stats"]["Trades"] >= 1 and len(st_["checks"]) == 3
     # Always-true rules signal on every stock in a scan.
@@ -605,14 +611,18 @@ def test_saved_earnings_are_reused_until_the_next_report(monkeypatch, tmp_path):
     assert back is not None and back.equals(ed)
 
 
-def test_playbook_plan_matches_the_research():
+def test_playbook_numbers_match_the_research():
     from sharkfin import playbook as pb
     d = pb.load()
-    st_ = pb.stats(pb.mix(d, pb.WEIGHTS).loc[pb.GRADE[0]:pb.GRADE[1]], d["tbill"])
-    assert abs(st_["Return per year"] - 0.354) < 0.005 and abs(st_["Sharpe"] - 1.60) < 0.03
-    assert abs(st_["Worst drop"] + 0.18) < 0.01
-    w = pb.best_weights(d)
-    assert [round(w[k], 1) for k in (pb.LD, pb.BR, pb.DN)] == [0.5, 0.2, 0.3]
+    for name in (pb.LD, pb.BR, "S&P 500 (SPY)", "Nasdaq-100 (QQQ)"):
+        st_ = pb.stats(pb.sleeve(d, name).loc[pb.GRADE[0]:pb.GRADE[1]], d["tbill"])
+        f = pb.FACTS[name]
+        assert abs(st_["Return per year"] - f["return"]) < 0.005 and abs(st_["Sharpe"] - f["sharpe"]) < 0.01
+        assert abs(st_["Worst drop"] - f["worst"]) < 0.005 and abs(st_["2022"] - f["y2022"]) < 0.005
+    both = pb.stats(pb.mix(d, pb.WEIGHTS).loc[pb.GRADE[0]:pb.GRADE[1]], d["tbill"])
+    assert abs(both["Return per year"] - pb.FACTS["Both (70 / 30)"]["return"]) < 0.005
+    w = pb.best_weights(d)  # picked on 2006-21 only: all Dive Zone, as the page says
+    assert round(w[pb.LD], 1) == 1.0
     sp = pb.split(100_000)
     assert abs(sum(v["sleeve"] for v in sp.values()) - 100_000) < 1e-6
 
@@ -820,3 +830,84 @@ def test_every_speculation_theme_is_complete():
     for t in sp.THEMES:
         assert t.plays and t.why_now and t.proof and t.risks and t.bottleneck
         assert all(p.tier in sp.TIER_HELP for p in t.plays)
+
+
+def test_failed_downloads_are_remembered_briefly_and_keep_the_last_good_answer(monkeypatch):
+    import time as _t
+    from sharkfin import data
+    data._cache.clear()
+    calls, reply = [], {"v": [1]}
+
+    @data.ttl_cache(0.05)
+    def f(x):
+        calls.append(x)
+        return list(reply["v"])
+
+    assert f(1) == [1]
+    _t.sleep(0.08)
+    reply["v"] = []                        # the refresh fails...
+    assert f(1) == [1] and f.cached(1)     # ...so the last good answer stays, and isn't refetched on every rerun
+    assert f(1) == [1] and len(calls) == 2
+    monkeypatch.setattr(data, "FAIL_TTL", 0.02)
+    _t.sleep(0.03)
+    reply["v"] = [2]
+    assert f(1) == [2]                     # retried once the short failure window passed
+
+    @data.ttl_cache(60)
+    def empty():
+        calls.append("e")
+        return []
+
+    empty(), empty()
+    assert calls.count("e") == 1
+    data._cache.clear()
+
+
+def test_rss_feeds_download_with_a_timeout(monkeypatch):
+    import requests
+    from sharkfin import data
+    seen = {}
+
+    class Reply:
+        content = (b"<?xml version='1.0'?><rss><channel><item><title>Fed holds</title><link>https://x/1</link>"
+                   b"<pubDate>Fri, 06 Nov 2026 15:00:00 GMT</pubDate></item></channel></rss>")
+
+        def raise_for_status(self):
+            pass
+
+    def get(url, **kw):
+        seen.update(kw)
+        return Reply()
+
+    monkeypatch.setattr(requests, "get", get)
+    arts = data._rss("https://example.com/feed", "Test")
+    assert seen.get("timeout") and arts and arts[0]["title"] == "Fed holds"
+
+    def hang(url, **kw):
+        raise requests.Timeout("no answer")
+
+    monkeypatch.setattr(requests, "get", hang)
+    assert data._rss("https://example.com/feed", "Test") == []
+
+
+def test_drivers_earnings_record_and_estimates():
+    from sharkfin import drivers
+
+    idx = pd.bdate_range("2025-01-01", "2026-11-06")
+    close = pd.Series(100.0, index=idx)
+    close.loc["2026-07-21":] = 110.0  # +10% the session after a Jul 20 after-close report
+    ed = pd.DataFrame({"EPS Estimate": [2.0, 1.9], "Reported EPS": [np.nan, 2.3], "Surprise(%)": [np.nan, 21.0]},
+                      index=pd.to_datetime(["2026-11-20 16:05", "2026-07-20 16:05"]))
+    er = drivers.earnings_record(ed, close, now=pd.Timestamp("2026-11-06"))
+    assert er["days_to_next"] == 14 and er["beats"] == 1
+    assert abs(er["last_reaction"] - 0.10) < 1e-9 and abs(er["last_surprise"] - 0.21) < 1e-9
+    trend = pd.DataFrame({"current": [5.5], "30daysAgo": [5.0], "90daysAgo": [4.4]}, index=["+1y"])
+    rev = pd.DataFrame({"upLast30days": [6], "downLast30days": [2]}, index=["+1y"])
+    est = drivers.estimate_trend(trend, rev)
+    assert abs(est["chg30"] - 0.10) < 1e-9 and abs(est["chg90"] - 0.25) < 1e-9 and est["balance"] == 0.5
+    info = {"forwardPE": 30, "earningsGrowth": 0.25, "returnOnEquity": 0.3, "targetMeanPrice": 130}
+    news = {"n": 0}
+    week = drivers.drivers(5, info=info, earnings=er, estimates=est, news=news, close=close, vix=18.0)
+    year = drivers.drivers(252, info=info, earnings=er, estimates=est, news=news, close=close, vix=18.0)
+    assert [i["name"] for i in week["items"]][0] == "Earnings report"
+    assert "Valuation" in [i["name"] for i in year["items"]] and "Earnings report" not in [i["name"] for i in year["items"]]

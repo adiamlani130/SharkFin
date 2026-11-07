@@ -2,7 +2,7 @@
 the weekly trend, and RSI bearish divergence.
 
 These describe where a stock sits; they are not a trading system. SharkFin's
-swing system is Leader Dip (``leader_dip.py``).
+swing system is Dive Zone (``leader_dip.py``).
 """
 
 from __future__ import annotations

@@ -526,40 +526,72 @@ function legacySea(cv) {
   const uR = gl.getUniformLocation(prog, "R"), uT = gl.getUniformLocation(prog, "T"),
         uM = gl.getUniformLocation(prog, "MOTION");
 
-  // Render below screen resolution and let the browser scale up: water is soft, and this keeps laptops cool.
-  // The scale adapts to how long frames actually take.
-  let scale = Math.min(window.devicePixelRatio || 1, 1.5) * (window.innerWidth > 1600 ? 0.6 : 0.75);
-  const MIN_SCALE = 0.35, MAX_SCALE = Math.min(window.devicePixelRatio || 1, 1.5);
+  // The sea is drawn inside the app's own page, so a frame the GPU can't finish in time stalls clicks and scrolling
+  // too. So: 30 frames a second at most, below screen resolution (water is soft, the browser scales it up), smaller
+  // when frames run slow, and a still picture when even the smallest size can't keep up or there is no real GPU
+  // (software renderers draw this shader on the CPU and would freeze the page).
+  const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+  const renderer = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) || "") : "";
+  const software = /swiftshader|llvmpipe|softpipe|software|basic render|microsoft basic/i.test(renderer);
+  const FRAME_MS = 1000 / 30;
+  const MAX_SCALE = Math.min(window.devicePixelRatio || 1, 1);
+  const MIN_SCALE = 0.3, STILL_SCALE = 0.45;            // a still picture is drawn once, so it can be sharper
+  let scale = software ? STILL_SCALE : (window.innerWidth > 1600 ? 0.5 : 0.62) * MAX_SCALE;
   function resize() {
     cv.width = Math.max(2, Math.round(window.innerWidth * scale));
     cv.height = Math.max(2, Math.round(window.innerHeight * scale));
     gl.viewport(0, 0, cv.width, cv.height);
+    if (stopped) draw(lastT);  // a still sea is redrawn once at the new size
   }
-  window.addEventListener("resize", resize);
-  resize();
 
   const t0 = performance.now();
   const START = Number(new URLSearchParams(location.search).get("t")) || 26;  // seconds in: a fin is already crossing
-  let frames = 0, acc = 0, last = performance.now(), shown = false;
-  function frame(now) {
-    const t = still ? START : START + (now - t0) / 1000;
+  let lastT = START, stopped = still || software, shown = false, pausedUntil = 0;
+  function draw(t) {
     gl.uniform2f(uR, cv.width, cv.height);
     gl.uniform1f(uT, t);
-    gl.uniform1f(uM, still ? 0 : 1);
+    gl.uniform1f(uM, stopped && still ? 0 : 1);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     if (!shown) { shown = true; requestAnimationFrame(() => cv.classList.add("on")); }
-    if (still) return;
-    const dt = now - last; last = now;
-    if (dt < 250) { acc += dt; frames++; }
-    if (frames === 40) {                                  // re-balance quality every 40 frames
-      const avg = acc / frames;
-      if (avg > 26 && scale > MIN_SCALE) { scale = Math.max(MIN_SCALE, scale * 0.82); resize(); }
-      else if (avg < 13 && scale < MAX_SCALE) { scale = Math.min(MAX_SCALE, scale * 1.1); resize(); }
-      frames = 0; acc = 0;
-    }
-    requestAnimationFrame(frame);
   }
-  cv.addEventListener("webglcontextlost", (e) => { e.preventDefault(); fallback(); });
+  window.addEventListener("resize", resize);
+  resize();
+  draw(lastT);
+  if (stopped) return;
+
+  // Hold the animation while the visitor clicks into the app, so the page switch never waits on the GPU.
+  try {
+    window.parent.document.addEventListener("pointerdown", () => { pausedUntil = performance.now() + 1500; }, true);
+    window.parent.document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") pausedUntil = performance.now() + 1500;
+    }, true);
+  } catch (e) { /* not same-origin: nothing to listen to */ }
+
+  let last = 0, frames = 0, acc = 0, since = 0, slowRounds = 0;
+  function frame(now) {
+    if (stopped) return;
+    requestAnimationFrame(frame);
+    if (now < pausedUntil || now - last < FRAME_MS - 2) return;
+    const dt = last ? now - last : FRAME_MS;
+    last = now;
+    if (!since) since = now;
+    lastT = START + (now - t0) / 1000;
+    draw(lastT);
+    if (dt < 1000) { acc += dt; frames++; }
+    if (frames >= 3 && now - since >= 1000) {            // re-balance about once a second
+      const avg = acc / frames;
+      if (avg > FRAME_MS * 1.35) {
+        if (scale > MIN_SCALE) { scale = Math.max(MIN_SCALE, scale * (avg > FRAME_MS * 3 ? 0.6 : 0.8)); resize(); }
+        else if (avg > FRAME_MS * 3 || ++slowRounds >= 2) {  // too slow even when small: keep it still
+          stopped = true; scale = STILL_SCALE; resize();
+        }
+      } else if (avg < FRAME_MS * 1.08 && scale < MAX_SCALE * 0.75) {
+        scale = Math.min(MAX_SCALE * 0.75, scale * 1.08); resize();
+      }
+      frames = 0; acc = 0; since = now;
+    }
+  }
+  cv.addEventListener("webglcontextlost", (e) => { e.preventDefault(); stopped = true; fallback(); });
   requestAnimationFrame(frame);
 })();
 </script>
