@@ -30,7 +30,9 @@ BLURB = {
 
 
 @st.cache_data(ttl=24 * 3600, show_spinner=False)
-def research() -> pd.DataFrame:
+def research(version: tuple) -> pd.DataFrame:
+    # Keyed on the data file's size and time, so a new research file never meets an old cached copy (a cache
+    # from before the Nov 2026 rename had other columns and crashed the page).
     return pb.load()
 
 
@@ -39,7 +41,7 @@ def lab_table(name: str) -> pd.DataFrame:
     return pd.read_csv(LAB / f"{name}.csv")
 
 
-d = research()
+d = research((pb.DATA.stat().st_mtime_ns, pb.DATA.stat().st_size, tuple(pb.COLUMNS.values())))
 series = {k: pb.sleeve(d, k) for k in (LD, BR, SPY, QQQ)}
 
 
