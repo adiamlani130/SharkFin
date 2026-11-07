@@ -51,6 +51,10 @@ DEFAULT_THEME_WEIGHTS = {
 }
 # Themes the replay can rebuild from history (prices, plus Yahoo's earnings dates when available).
 REPLAYABLE = (*PRICE_FACTORS, *EARNINGS_FACTORS)
+# A month's drop bigger than this, below the 50-day average, counts as a falling knife (picked on 2006-2021,
+# checked on 2021-2026; see research_data/catalyst_lab/knife_guard.csv: every cutoff from 15% to 30% moved the
+# replay by under 0.4% a year either way, so it is kept to keep crashing stocks off the top of the list, not for return).
+KNIFE_DROP = 0.20
 
 
 def winsorize(s: pd.Series, lo: float = 0.025, hi: float = 0.975) -> pd.Series:
@@ -104,6 +108,9 @@ def price_factor_frame(prices: pd.DataFrame, asof: int | None = None) -> pd.Data
     f["rev_1w"] = -(p.iloc[-1] / p.iloc[-6] - 1)
     f["ret_1m"] = p.iloc[-1] / p.iloc[-22] - 1
     f["rev_1m"] = -f["ret_1m"]
+    f["vs_50"] = last / sma50 - 1
+    f["price"] = last
+    f["ret_3m"] = p.iloc[-1] / p.iloc[-64] - 1 if n > 64 else np.nan
     f["ret_1w"] = p.iloc[-1] / p.iloc[-6] - 1
 
     # Market = equal-weighted universe. Beta and residual momentum.
@@ -122,6 +129,25 @@ def price_factor_frame(prices: pd.DataFrame, asof: int | None = None) -> pd.Data
     return f
 
 
+# Industries whose profits swing with a cycle (Yahoo's names). At the top of the cycle analysts project peak profits
+# forward, so a forward P/E of 3-5 marks the peak, not a bargain: these are valued on through-cycle earnings instead.
+CYCLICAL_INDUSTRIES = {
+    "Semiconductors", "Semiconductor Equipment & Materials", "Computer Hardware", "Auto Manufacturers", "Auto Parts",
+    "Steel", "Aluminum", "Copper", "Other Industrial Metals & Mining", "Gold", "Silver", "Chemicals",
+    "Specialty Chemicals", "Agricultural Inputs", "Oil & Gas E&P", "Oil & Gas Integrated",
+    "Oil & Gas Refining & Marketing", "Oil & Gas Equipment & Services", "Oil & Gas Drilling", "Airlines",
+    "Marine Shipping", "Residential Construction", "Building Materials", "Farm & Heavy Construction Machinery",
+    "Coking Coal", "Thermal Coal", "Lumber & Wood Production", "Paper & Paper Products", "Trucking",
+}
+CYCLICAL_SECTORS = {"Energy", "Basic Materials", "Materials"}
+
+
+def is_cyclical(fund: pd.DataFrame) -> pd.Series:
+    ind = fund["industry"] if "industry" in fund else pd.Series(None, index=fund.index)
+    sec = fund["sector"] if "sector" in fund else pd.Series(None, index=fund.index)
+    return (ind.isin(CYCLICAL_INDUSTRIES) | sec.isin(CYCLICAL_SECTORS)).fillna(False)
+
+
 def fundamental_factor_frame(fund: pd.DataFrame) -> pd.DataFrame:
     """Map raw fundamentals (from yfinance ``info``) to factor exposures."""
     g = lambda c: pd.to_numeric(fund.get(c), errors="coerce") if c in fund else pd.Series(np.nan, index=fund.index)
@@ -129,6 +155,8 @@ def fundamental_factor_frame(fund: pd.DataFrame) -> pd.DataFrame:
     fpe = g("forwardPE").where(lambda x: x > 0)
     tpe = g("trailingPE").where(lambda x: x > 0)
     f["earnings_yield"] = (1 / fpe).fillna(1 / tpe)
+    f["cyclical"] = is_cyclical(fund).astype(float)
+    f["trailing_ey"] = 1 / tpe
     mcap = g("marketCap")
     f["fcf_yield"] = g("freeCashflow") / mcap
     f["ebitda_ev"] = 1 / g("enterpriseToEbitda").where(lambda x: x > 0)
@@ -174,7 +202,7 @@ def earnings_factor_frame(histories: dict, asof: pd.Timestamp | None = None, sta
         if asof is not None and not t.empty:
             t = t[t.index.normalize() < pd.Timestamp(asof).normalize()]
         if t.empty:
-            rows[sym] = {"eps_surprise": np.nan, "beat_streak": np.nan, "eps_yoy": np.nan}
+            rows[sym] = {"eps_surprise": np.nan, "beat_streak": np.nan, "eps_yoy": np.nan, "eps_norm": np.nan}
             continue
         sur = pd.to_numeric(t["Surprise(%)"], errors="coerce")
         ref = pd.Timestamp(asof) if asof is not None else pd.Timestamp.now()
@@ -189,15 +217,31 @@ def earnings_factor_frame(histories: dict, asof: pd.Timestamp | None = None, sta
         yoy = np.nan
         if len(eps) >= 5 and abs(eps.iloc[-5]) > 0.01 and (t.index[-1] - t.index[-5]).days < 420:
             yoy = float(np.clip((eps.iloc[-1] - eps.iloc[-5]) / abs(eps.iloc[-5]), -2, 5))
+        # Through-cycle earnings: the average quarterly EPS over the last five years (at least eight reports), x4.
+        recent = eps[t.index > t.index[-1] - pd.DateOffset(years=5)].dropna()
+        norm = float(recent.mean() * 4) if len(recent) >= 8 else np.nan
         rows[sym] = {"eps_surprise": float(np.clip(last, -100, 100)) if fresh and np.isfinite(last) else np.nan,
-                     "beat_streak": float(streak), "eps_yoy": yoy if fresh else np.nan}
-    return pd.DataFrame.from_dict(rows, orient="index", columns=["eps_surprise", "beat_streak", "eps_yoy"])
+                     "beat_streak": float(streak), "eps_yoy": yoy if fresh else np.nan, "eps_norm": norm}
+    return pd.DataFrame.from_dict(rows, orient="index", columns=["eps_surprise", "beat_streak", "eps_yoy", "eps_norm"])
+
+
+def falling_knife(raw: pd.DataFrame, drop: float = KNIFE_DROP) -> pd.Series:
+    """True where a stock fell more than ``drop`` over the last month and sits below its 50-day average.
+
+    Short-term reversal (buying recent losers) works for quiet dips, but drops that come with news tend to keep
+    going (Chan 2003), and a fall this big below the 50-day almost always has news behind it."""
+    if "ret_1m" not in raw or "vs_50" not in raw:
+        return pd.Series(False, index=raw.index)
+    return ((raw["ret_1m"] < -drop) & (raw["vs_50"] < 0)).fillna(False)
 
 
 def composite_scores(price_f: pd.DataFrame, fund_f: pd.DataFrame | None = None,
                      sectors: pd.Series | None = None, theme_weights: dict | None = None,
-                     earn_f: pd.DataFrame | None = None) -> pd.DataFrame:
-    """Combine factor exposures into theme z-scores and a composite score."""
+                     earn_f: pd.DataFrame | None = None, knife_guard: bool = True) -> pd.DataFrame:
+    """Combine factor exposures into theme z-scores and a composite score.
+
+    With ``knife_guard`` a falling knife (see ``falling_knife``) gets no credit from the Reversal theme, and
+    cyclical stocks are valued on through-cycle earnings when those are given (``normal_ey``)."""
     tw = dict(DEFAULT_THEME_WEIGHTS if theme_weights is None else theme_weights)
     frames = [price_f]
     groups = dict(PRICE_FACTORS)
@@ -209,6 +253,12 @@ def composite_scores(price_f: pd.DataFrame, fund_f: pd.DataFrame | None = None,
         groups.update(FUNDAMENTAL_FACTORS)
     raw = pd.concat(frames, axis=1)
     raw = raw.loc[:, ~raw.columns.duplicated()]
+    if knife_guard and {"cyclical", "earnings_yield", "eps_norm", "price"} <= set(raw.columns):
+        cyc = raw["cyclical"] > 0
+        # Through-cycle earnings yield; a stock without five years of reports falls back to trailing earnings.
+        norm_ey = (raw["eps_norm"] / raw["price"]).fillna(raw.get("trailing_ey", np.nan))
+        raw["earnings_yield"] = raw["earnings_yield"].where(~cyc | norm_ey.isna(),
+                                                            np.fmin(raw["earnings_yield"], norm_ey))
     out = pd.DataFrame(index=raw.index)
     for theme, members in groups.items():
         cols = [c for c in members if c in raw.columns and raw[c].notna().sum() >= 5]
@@ -222,6 +272,10 @@ def composite_scores(price_f: pd.DataFrame, fund_f: pd.DataFrame | None = None,
     themes = [t for t in out.columns if tw.get(t, 0) > 0]
     w = pd.Series({t: tw[t] for t in themes})
     avail = out[themes].notna().mul(w, axis=1).sum(axis=1).replace(0, np.nan)
+    knife = falling_knife(raw) if knife_guard else pd.Series(False, index=raw.index)
+    if "Reversal" in out:
+        out.loc[knife, "Reversal"] = out.loc[knife, "Reversal"].clip(upper=0)
+    out["Falling knife"] = knife
     out["Composite"] = out[themes].fillna(0).mul(w, axis=1).sum(axis=1) / avail
     # Require at least half of the theme weight to be present.
     out.loc[avail < w.sum() * 0.5, "Composite"] = np.nan
@@ -290,7 +344,8 @@ def explain(row: pd.Series, top: int = 3, weights: dict | None = None) -> tuple[
 
 def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile: float = 0.2,
                              cost_bps: float = 10.0, theme_weights: dict | None = None,
-                             earnings: dict | None = None, start=None, members: pd.DataFrame | None = None) -> dict:
+                             earnings: dict | None = None, start=None, members: pd.DataFrame | None = None,
+                             knife_guard: bool = True) -> dict:
     """Monthly-rebalanced long top-quantile portfolio of the price (and, given ``earnings``, earnings) composite.
 
     Uses only information available at each rebalance date: ``earnings`` maps symbols to Yahoo earnings-date
@@ -322,7 +377,7 @@ def backtest_price_composite(prices: pd.DataFrame, rebalance: int = 21, quantile
         eligible = mem.columns[mem.iloc[t].to_numpy()] if mem is not None else prices.columns
         pf = pf.loc[pf.index.intersection(eligible)]
         ef = earnings_factor_frame(earnings, asof=prices.index[t]) if earnings else None
-        sc = composite_scores(pf, None, None, tw, earn_f=ef)["Composite"].dropna()
+        sc = composite_scores(pf, None, None, tw, earn_f=ef, knife_guard=knife_guard)["Composite"].dropna()
         if len(sc) < 10:
             continue
         end = min(t + rebalance, len(prices) - 1)

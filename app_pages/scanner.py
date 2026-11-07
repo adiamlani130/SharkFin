@@ -191,11 +191,16 @@ tabs = st.tabs(["Rankings", "Swing setups", "Core longs", "Could run", "Shark Sc
 def card(row, sym, kind):
     pos, neg = factors.explain(row, weights=tw)
     drivers = "".join(ui.pill(p, "pos") for p in pos) + "".join(ui.pill(n, "neg") for n in neg)
+    if bool(row.get("Falling knife", False)):
+        drivers += ui.pill("Falling knife: no dip credit", "neg")
+    if row.get("cyclical", 0) > 0:
+        drivers += ui.pill("Cyclical: valued on 5-year earnings", "neu")
     sub = " · ".join(ui.h(x) for x in (row.get("Name"), row.get("Sector")) if isinstance(x, str) and x)
     st.markdown(
         f"<div class='sf-card {kind}'><span class='t'>{sym}</span> <span class='sf-muted'>{sub}</span>"
         f"<div class='row'>Score <b>{row['Composite']:+.2f}</b> · beats {row['Percentile']:.0f}% of the list · "
         f"{ui.h(ui.fmt_money(row['Price']))} · 1M {ui.fmt_pct(row.get('ret_1m'), 1, True)} · "
+        f"3M {ui.fmt_pct(row.get('ret_3m'), 0, True)} · off high {ui.fmt_pct(row.get('high_52w', np.nan) - 1, 0, True)} · "
         f"12M {ui.fmt_pct(row.get('mom_12_1'), 0, True)}</div><div class='row'>{drivers}</div></div>",
         unsafe_allow_html=True)
 
@@ -487,7 +492,8 @@ with tabs[0]:
                 card(row, sym_, "sell")
         st.subheader("Full ranking", help="Theme columns are standard deviations above (+) or below (−) the stock's sector "
                                           "average. Hover a column name for what it measures.")
-        show = ["Name", "Sector", "Price", "Composite", "Percentile", *themes, "ret_1m", "mom_12_1", "volatility"]
+        show = ["Name", "Sector", "Price", "Composite", "Percentile", *themes, "ret_1m", "ret_3m", "mom_12_1",
+                "Falling knife", "volatility"]
         show = [c for c in show if c in scores.columns]
         st.dataframe(scores[show], width="stretch", height=460, column_config={
             "Price": st.column_config.NumberColumn(format="$%.2f"),
@@ -495,6 +501,10 @@ with tabs[0]:
             "Percentile": st.column_config.ProgressColumn("Rank", min_value=0, max_value=100, format="%.0f",
                                                           help="Share of the list this stock beats."),
             "ret_1m": st.column_config.NumberColumn("1M", format="percent"),
+            "ret_3m": st.column_config.NumberColumn("3M", format="percent"),
+            "Falling knife": st.column_config.CheckboxColumn(
+                "Falling knife", help="Down 20%+ in a month and under its 50-day average. Such a drop usually has "
+                                      "news behind it and tends to keep going, so it gets no credit from Reversal."),
             "mom_12_1": st.column_config.NumberColumn("12M (ex last month)", format="percent"),
             "volatility": st.column_config.NumberColumn("Volatility", format="percent"),
             **{t: st.column_config.NumberColumn(format="%+.2f", help=factors.THEME_HELP[t]) for t in themes},
