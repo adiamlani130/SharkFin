@@ -111,35 +111,47 @@ if street:
                    "least upside:")
         ui.kv([(k, f"{v:+.1%}") for k, v in up.items()])
 
-# ---- Sectors -------------------------------------------------------------------------------------------
-st.subheader("Sectors", help="SPDR sector ETFs, sorted by return over the period you pick.")
-span = st.segmented_control("Period", ["1D", "1W", "1M", "3M", "YTD"], default="1M", key="home_span",
-                            label_visibility="collapsed") or "1M"
-look = {"1D": 1, "1W": 5, "1M": 21, "3M": 63}
-rows_ = []
+# ---- Sector rotation ---------------------------------------------------------
+st.subheader("Sectors", help="SPDR sector ETFs. The heatmap shows returns; the map shows which sectors are leading and "
+                             "which are gaining or losing momentum.")
+rows = []
 for name, sym in data.SECTOR_ETFS.items():
     s = px.get(sym, pd.Series(dtype=float)).dropna()
-    if len(s) < 70:
+    if len(s) < 130:
         continue
-    if span == "YTD":
-        base = s[s.index.year == s.index[-1].year]
-        r = s.iloc[-1] / base.iloc[0] - 1 if len(base) else np.nan
-    else:
-        r = s.iloc[-1] / s.iloc[-1 - look[span]] - 1
-    rows_.append((name, r))
-if rows_:
-    sec = pd.Series(dict(rows_)).dropna().sort_values()
-    mkt = spx.iloc[-1] / spx.iloc[-1 - look.get(span, 1)] - 1 if span != "YTD" and len(spx) > 64 else np.nan
-    fig = go.Figure(go.Bar(x=sec.values * 100, y=sec.index, orientation="h",
-                           marker_color=np.where(sec.values >= 0, ui.GREEN, ui.RED), marker_line_width=0,
-                           text=[f"{v:+.1%}" for v in sec.values], textposition="outside", cliponaxis=False,
-                           hovertemplate="%{y}: %{text}<extra></extra>"))
-    if np.isfinite(mkt):
-        fig.add_vline(x=mkt * 100, line=dict(color=ui.MUTED, dash="dot", width=1), annotation_text="S&P 500",
-                      annotation_position="top", annotation_font=dict(size=10, color=ui.MUTED))
-    fig.update_layout(xaxis=dict(ticksuffix="%", zeroline=True, zerolinecolor="#2a3442"), yaxis=dict(showgrid=False),
-                      margin=dict(l=10, r=40, t=10, b=30), bargap=0.35)
-    ui.plotly(fig, 360, key="home_sectors")
+    rows.append({"Sector": name, "1D": s.iloc[-1] / s.iloc[-2] - 1, "1W": s.iloc[-1] / s.iloc[-6] - 1,
+                 "1M": s.iloc[-1] / s.iloc[-22] - 1, "3M": s.iloc[-1] / s.iloc[-64] - 1,
+                 "6M": s.iloc[-1] / s.iloc[-127] - 1})
+if rows:
+    sec = pd.DataFrame(rows).set_index("Sector").sort_values("1M", ascending=False)
+    left, right = st.columns([3, 2])
+    with left:
+        z = sec.values * 100
+        fig = go.Figure(go.Heatmap(z=np.clip(z, -15, 15), x=sec.columns, y=sec.index, colorscale=ui.DIVERGING,
+                                   zmid=0, text=[[f"{v:+.1f}%" for v in r] for r in z], texttemplate="%{text}",
+                                   showscale=False, xgap=2, ygap=2, hovertemplate="%{y} · %{x}: %{text}<extra></extra>"))
+        fig.update_layout(title="Returns by sector", yaxis=dict(autorange="reversed", showgrid=False),
+                          xaxis=dict(side="top", showgrid=False))
+        ui.plotly(fig, 430, key="home_heat")
+    with right:
+        # Relative rotation: 3M momentum vs 1M change in momentum
+        # Relative to the average sector, so the quadrants read as leading / lagging.
+        x = (sec["3M"] - sec["3M"].mean()) * 100
+        y = ((sec["1M"] - sec["3M"] / 3) - (sec["1M"] - sec["3M"] / 3).mean()) * 100
+        colors = np.where((x >= 0) & (y >= 0), ui.GREEN, np.where(x >= 0, ui.ORANGE, np.where(y >= 0, ui.BLUE, ui.RED)))
+        fig = go.Figure(go.Scatter(x=x, y=y, mode="markers+text", text=sec.index, textposition="top center",
+                                   textfont=dict(size=10), marker=dict(size=11, color=colors),
+                                   hovertemplate="%{text}<br>3M vs avg %{x:+.1f}%<br>Acceleration %{y:+.1f}%<extra></extra>"))
+        fig.add_hline(y=0, line=dict(color="#2a3442"))
+        fig.add_vline(x=0, line=dict(color="#2a3442"))
+        mx, my = max(abs(x).max(), 1) * 1.25, max(abs(y).max(), 1) * 1.3
+        for qx, qy, lbl, colr in ((1, 1, "Leading", ui.GREEN), (1, -1, "Weakening", ui.ORANGE),
+                                  (-1, -1, "Lagging", ui.RED), (-1, 1, "Improving", ui.BLUE)):
+            fig.add_annotation(x=qx * mx * 0.97, y=qy * my * 0.95, text=lbl, showarrow=False, font=dict(color=colr, size=11),
+                               xanchor="right" if qx > 0 else "left", yanchor="top" if qy > 0 else "bottom", opacity=0.8)
+        fig.update_layout(title="Rotation map", xaxis=dict(title="3-month return vs average sector (%)", range=[-mx, mx]),
+                          yaxis=dict(title="Momentum change (%)", range=[-my, my]), showlegend=False)
+        ui.plotly(fig, 430, key="home_rotation")
 
 # ---- Watchlist + headlines -----------------------------------------------------------------------------
 left, right = st.columns(2)

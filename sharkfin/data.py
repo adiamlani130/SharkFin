@@ -746,6 +746,17 @@ def peers_for(symbol: str, inf: dict, max_peers: int = 15) -> list:
         if len(same) < 5 and "sector" in df:
             same = df[df["sector"] == inf.get("sector")]
         peers += [s for s in same.index if s not in peers]
+    # A giant among small peers (Apple among PC and disk makers) gets the same-sector companies closest to its
+    # size added, so its multiples aren't set by businesses a twentieth of its size.
+    own = pd.to_numeric(pd.Series([inf.get("marketCap")]), errors="coerce").iloc[0]
+    if peers and np.isfinite(own) and own > 0 and not row.empty:
+        mc = pd.to_numeric(infos(tuple(peers[:60])).get("marketCap"), errors="coerce")
+        if not (mc >= own / 5).any():
+            same = [x for x in tab[tab["Sector"] == row["Sector"].iloc[0]]["Symbol"] if x != symbol and x not in peers]
+            big = pd.to_numeric(infos(tuple(same[:80])).get("marketCap"), errors="coerce").dropna()
+            near = (np.log(big / own).abs()).sort_values().index[:6].tolist()
+            closest = (np.log(mc.dropna() / own).abs()).sort_values().index[:3].tolist()  # keep a few industry peers
+            return (near + [x for x in closest if x not in near])[:max_peers]
     # Prefer peers closest in size.
     if len(peers) > max_peers:
         caps = infos(tuple(peers[:60]))
