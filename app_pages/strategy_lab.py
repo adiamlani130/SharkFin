@@ -566,9 +566,35 @@ def catalyst_tab():
         st.subheader("FDA decisions by company size", help="Approvals of new drugs and biologics and complete "
                                                            "response letters from openFDA; returns vs XBI.")
         st.dataframe(fd, hide_index=True, width="stretch", column_config=_pct_cols(fd))
-        st.caption("Small caps ($300M-2B) move the most: +12% on approvals, -27% on rejections. Holding through is a "
-                   "coin flip with a -75% tail; the run-up into the date is the steadier trade. Failed companies that "
-                   "delisted are missing from Yahoo, so post-rejection rebounds look better than they were.")
+        st.caption("Small caps ($300M-2B) move the most: +12% on approvals, -27% on rejections. Failed companies "
+                   "that delisted are missing from Yahoo, so post-rejection rebounds look better than they were.")
+    sp = _cat("sec_pdufa")
+    if not sp.empty:
+        st.subheader("Trading a known FDA decision date", help="PDUFA dates taken from company 8-Ks (2012 on), "
+                     "traded only after the filing that announced them. Dates that were later extended are left out. "
+                     "Medians vs XBI after costs.")
+        st.dataframe(sp, hide_index=True, width="stretch", column_config=_pct_cols(sp))
+        st.caption("Holding through the decision loses at every size; in micro caps the stock falls in 3 of 4 "
+                   "decisions. The one edge is the run-up in micro caps: buy 20 trading days before, sell the day "
+                   "before. It worked in 2021-26 but not in 2012-21, with about 70 cases. A positive Phase 3 "
+                   "first did not make holding through any safer.")
+    sr = _cat("sec_readouts")
+    if not sr.empty:
+        st.subheader("Trial readouts (Phase 2/3 topline)", help="Press releases in 8-Ks, sorted by their headline. "
+                     "Reaction is the close before the filing to the close one session after; the 3 months start at "
+                     "the next open. Medians vs XBI.")
+        st.dataframe(sr, hide_index=True, width="stretch", column_config=_pct_cols(sr))
+        st.caption("A failed trial costs 65-75% in small companies. Companies call most readouts positive, and "
+                   "those move only a few percent; over the next 3 months they lag biotech most of the time. Stocks do "
+                   "not run up into readouts: the dates are rarely known in advance.")
+    sd = _cat("sec_dilution")
+    if not sd.empty:
+        st.subheader("Dilution alarm: after a big jump", help="Every 3-day jump of 30%+ vs XBI in these biotechs, "
+                     "and whether a stock offering (424B4/424B5) followed. A shelf is an S-3 filed in the 3 years before.")
+        st.dataframe(sd, hide_index=True, width="stretch", column_config=_pct_cols(sd))
+        st.caption("With a shelf on file, 1 in 6 small caps sells stock within 10 days of a jump, vs 1 in 25 "
+                   "without. After a positive readout jumps 20%+, 6 in 10 sell stock within 10 days. Either way the "
+                   "next 3 months usually trail biotech: taking profit into the jump beats holding it.")
     rr = _cat("radar_rules")
     if not rr.empty:
         st.subheader("Speculation Radar rules on every S&P 500 stock")

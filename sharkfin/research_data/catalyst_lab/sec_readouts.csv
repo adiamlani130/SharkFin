@@ -1,0 +1,10 @@
+Headline,Size,Readouts,40 days before: median,Reaction: median,Reaction: % up,Next 3 months: median,Next 3 months: % up,Stock offering within 10 days
+mixed,Micro (<$300M),44,-0.1002,-0.0255,0.3636,-0.111,0.3421,0.0682
+mixed,Small ($300M-2B),50,-0.082,-0.0587,0.26,-0.1555,0.3191,0.04
+mixed,Mid ($2-10B),31,-0.0605,-0.0632,0.2581,-0.147,0.3214,0.0645
+negative,Micro (<$300M),9,-0.0761,-0.7381,0.1111,-0.2667,0.2857,0.1111
+negative,Small ($300M-2B),6,0.0684,-0.6659,0.0,-0.0475,0.4,0.0
+negative,Mid ($2-10B),9,-0.2127,-0.1734,0.2222,-0.0902,0.25,0.0
+positive,Micro (<$300M),63,-0.066,0.0045,0.5079,-0.0825,0.3966,0.1587
+positive,Small ($300M-2B),93,-0.0242,0.0509,0.5914,-0.0631,0.375,0.3011
+positive,Mid ($2-10B),84,-0.04,0.0076,0.5238,-0.0468,0.3514,0.1667
