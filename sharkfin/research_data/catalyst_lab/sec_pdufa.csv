@@ -1,0 +1,5 @@
+Size,Decisions,"Buy when date announced, sell day before: median","Buy when date announced, sell day before: % up","Buy 20 days before, sell day before: median","Buy 20 days before, sell day before: % up",Decision (3 days): median,Decision (3 days): % up,"Buy 20 days before, hold through: median","Buy 20 days before, hold through: % up"
+Micro (<$300M),71,-0.007,0.4789,0.0725,0.5915,-0.0841,0.2817,-0.0484,0.4085
+Small ($300M-2B),155,-0.028,0.4452,-0.0019,0.4903,-0.0144,0.4,-0.0275,0.4516
+Mid ($2-10B),129,0.0134,0.5349,-0.0101,0.4341,-0.0071,0.4496,-0.0178,0.4496
+Large (>$10B),181,-0.0167,0.4475,-0.0149,0.4365,-0.0064,0.3923,-0.0156,0.4365

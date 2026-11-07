@@ -2,7 +2,7 @@
 
 Each theme is a researched thesis (what the bottleneck is, why now, what would prove it, what could kill it)
 with a short list of listed ways to play it. ``radar`` reads each theme's price action so the page can say
-whether a theme is still quiet, just turning up (the window you want), already running, or cooling off.
+whether a theme is still quiet, just turning up, already running, cooling off, or broken (60%+ off its high).
 
 The research notes were written in October 2026 from company releases, earnings calls and news coverage
 (sources are listed on each theme). They are a watchlist for small, speculative positions, not tested
@@ -260,12 +260,18 @@ CASE_NOTES = [
 
 STAGES = {
     "Quiet": ("Below its 200-day and lagging the S&P 500. The story may be early, but the market isn't buying it yet.", "neu"),
-    "Turning up": ("Back above its 200-day, beating the S&P 500 over 6 months, and not yet up a lot over 12. "
-                   "This is the window you want: the market has started to notice.", "pos"),
-    "Running": ("Up a lot over 12 months and near its high. The trend is real, but most of the easy money is made.", "info"),
+    "Turning up": ("Back above its 200-day, beating the S&P 500 over 6 months, and not yet up a lot over 12. On S&P 500 "
+                   "stocks since 2006 this stage alone did about as well as the average stock, so use it to time a "
+                   "theme you already believe in, not as a buy signal by itself.", "pos"),
+    "Running": ("Up a lot over 12 months and near its high. Since 2021 these beat the average S&P 500 stock by about 9% "
+                "over the next year; in 2006-2021 they only matched it.", "info"),
     "Cooling": ("Pulling back after a big run, or back under its 200-day. Wait for it to turn up again.", "neg"),
+    "Broken": ("60% or more below its 52-week high. Since 2021 such S&P 500 stocks lagged the average by about 14% over "
+               "the next year (they beat it in 2006-2021, mostly thanks to the 2009 rebound). Something went wrong; "
+               "find out what before buying.", "neg"),
 }
-STAGE_ORDER = ["Turning up", "Running", "Quiet", "Cooling"]
+STAGE_ORDER = ["Turning up", "Running", "Quiet", "Cooling", "Broken"]
+BROKEN = 0.60        # this far below the 52-week high counts as broken
 RUN_12M = 0.60       # up more than this over a year counts as a run
 NEAR_HIGH = 0.15     # within this of the 52-week high
 
@@ -299,10 +305,12 @@ def stats(close: pd.Series, bench: pd.Series | None = None) -> dict:
 
 
 def stage(s: dict) -> str:
-    """Quiet / Turning up / Running / Cooling from a ``stats`` row (see ``STAGES``)."""
+    """Quiet / Turning up / Running / Cooling / Broken from a ``stats`` row (see ``STAGES``)."""
     vs200, r12, off, rs = (s.get(k, np.nan) for k in ("vs200", "12m", "off_high", "rs6m"))
     if not np.isfinite(vs200):
         return "Quiet"
+    if np.isfinite(off) and off < -BROKEN:
+        return "Broken"
     if vs200 < 0:
         peak = s.get("peak_run", np.nan)
         ran = (np.isfinite(r12) and r12 > RUN_12M) or (np.isfinite(peak) and peak > RUN_12M and np.isfinite(off) and off < -0.2)
