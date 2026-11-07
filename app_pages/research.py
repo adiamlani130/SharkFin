@@ -452,6 +452,11 @@ with tabs[1]:
 
     # ---- Blend (rendered at the top of the tab) -----------------------------
     lo_t, mean_t, hi_t = ui.num(inf.get("targetLowPrice")), ui.num(inf.get("targetMeanPrice")), ui.num(inf.get("targetHighPrice"))
+    apt = (ad or {}).get("analyst_price_targets")
+    if not np.isfinite(mean_t) and isinstance(apt, dict):
+        # Yahoo's quote summary sometimes comes back without targets (often on cloud hosts); its separate
+        # price-target feed usually still has them.
+        lo_t, mean_t, hi_t = ui.num(apt.get("low")), ui.num(apt.get("mean")), ui.num(apt.get("high"))
     intrinsic_name = "Excess-return model" if is_financial else "DCF"
     intrinsic = bank_out.get("value", np.nan) if is_financial else dcf_out.get("value", np.nan)
     fv = valuation.fair_value_summary(price, {
@@ -533,6 +538,10 @@ with tabs[2]:
                 f"{money(pt['bull'])}. The middle of {' and '.join(pt['basis'])}.",
                 ui.pill(fv["label"], "pos" if fv["upside"] > 0.1 else "neg" if fv["upside"] < -0.1 else "neu")
                 if np.isfinite(fv["fair_value"]) else "")
+        if "analyst target" not in pt["basis"]:
+            st.warning("Analyst targets didn't load from Yahoo this time, so the target and entry range come from "
+                       "SharkFin's own fair value alone, which runs low for richly priced growth stocks. Reload the "
+                       "page in a minute to bring the analyst view back in.")
         rng = (f"{money(er['low'])} – {money(er['high'])}" if np.isfinite(er["high"]) else "—")
         st.markdown(
             f"<div class='sf-card {'buy' if er['tone'] == 'pos' else 'sell' if er['tone'] == 'neg' else ''}'>"
