@@ -2,6 +2,7 @@
 
 import itertools
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -125,7 +126,7 @@ def condition_rows(kind: str):
 
 
 # ---------------------------------------------------------------------------
-tabs = st.tabs(["Build and test", "Compare strategies", "Dive Zone (S&P 500)"])
+tabs = st.tabs(["Build and test", "Compare strategies", "Dive Zone (S&P 500)", "Catalyst Lab"])
 
 def build_tab():
     names = list(builder.TEMPLATES)
@@ -514,6 +515,100 @@ def leader_dip_tab():
 
 with tabs[2]:
     leader_dip_tab()
+
+
+CAT = Path(__file__).resolve().parents[1] / "sharkfin" / "research_data" / "catalyst_lab"
+
+
+def _cat(name: str) -> pd.DataFrame:
+    f = CAT / f"{name}.csv"
+    return pd.read_csv(f) if f.exists() else pd.DataFrame()
+
+
+def _pct_cols(df: pd.DataFrame, skip=()) -> dict:
+    return {c: st.column_config.NumberColumn(format="percent") for c in df.columns
+            if c not in skip and pd.api.types.is_float_dtype(df[c]) and df[c].abs().max() < 5}
+
+
+def catalyst_tab():
+    st.markdown("<div class='sf-note'>News and event strategies, tested on point-in-time S&amp;P 500 members (and FDA "
+                "records for biotech) with no look-ahead: rules picked on 2006 - Oct 2021, graded on Oct 2021 - Nov 2026. "
+                "None of these is a sure thing; the tables show how often each setup worked and how many times it "
+                "happened.</div>", unsafe_allow_html=True)
+    pb = _cat("post_beat")
+    if not pb.empty:
+        st.subheader("Buy after a strong beat", help="Bought at the open after the reaction day, so the beat and the "
+                                                     "reaction are known first. Returns are vs SPY.")
+        st.dataframe(pb, hide_index=True, width="stretch", column_config=_pct_cols(pb))
+        st.caption("In big stocks the drift after a beat has mostly faded since 2021. The setup that held in both "
+                   "periods: a stock 30%+ below its high that beats by 10%+, jumps 5%+ and grows EPS 25%+.")
+    bm, dec = _cat("beat_model"), _cat("beat_model_deciles")
+    if not bm.empty:
+        st.subheader("Can we predict a beat?", help="Gradient-boosted model on what was known the day before each "
+                                                    "report; AUC 0.5 is a coin flip, 1.0 perfect.")
+        st.dataframe(bm, hide_index=True, width="stretch", column_config=_pct_cols(bm, skip=("AUC (grade)",)))
+        st.caption("Beats are fairly predictable, but the stock's move on the day is a coin flip at every level of "
+                   "confidence: expected beats are already priced in. The model can flag a likely big move, not its direction.")
+    bs = _cat("breadth_setups")
+    if not bs.empty:
+        st.subheader("Washed-out breadth", help="Up-volume share: the part of the day's S&P 500 volume in rising "
+                                                "stocks. Below 0.10 is a '90% down day'.")
+        rec = _cat("breadth_recent")
+        if not rec.empty:
+            last = rec.iloc[-1]
+            low = rec.loc[rec["upvol"].idxmin()]
+            st.markdown(f"Latest reading ({last.iloc[0]}): up-volume share **{last['upvol']:.2f}**, advancers "
+                        f"**{last['adv']:.2f}**. Lowest in the last 30 days: **{low['upvol']:.2f}** on {low.iloc[0]}.")
+        view = bs[bs["Period"] != "2006-2026"]
+        st.dataframe(view, hide_index=True, width="stretch", column_config=_pct_cols(view))
+    fd = _cat("fda_decisions")
+    if not fd.empty:
+        st.subheader("FDA decisions by company size", help="Approvals of new drugs and biologics and complete "
+                                                           "response letters from openFDA; returns vs XBI.")
+        st.dataframe(fd, hide_index=True, width="stretch", column_config=_pct_cols(fd))
+        st.caption("Small caps ($300M-2B) move the most: +12% on approvals, -27% on rejections. Failed companies "
+                   "that delisted are missing from Yahoo, so post-rejection rebounds look better than they were.")
+    sp = _cat("sec_pdufa")
+    if not sp.empty:
+        st.subheader("Trading a known FDA decision date", help="PDUFA dates taken from company 8-Ks (2012 on), "
+                     "traded only after the filing that announced them. Dates that were later extended are left out. "
+                     "Medians vs XBI after costs.")
+        st.dataframe(sp, hide_index=True, width="stretch", column_config=_pct_cols(sp))
+        st.caption("Holding through the decision loses at every size; in micro caps the stock falls in 3 of 4 "
+                   "decisions. The one edge is the run-up in micro caps: buy 20 trading days before, sell the day "
+                   "before. It worked in 2021-26 but not in 2012-21, with about 70 cases. A positive Phase 3 "
+                   "first did not make holding through any safer.")
+    sr = _cat("sec_readouts")
+    if not sr.empty:
+        st.subheader("Trial readouts (Phase 2/3 topline)", help="Press releases in 8-Ks, sorted by their headline. "
+                     "Reaction is the close before the filing to the close one session after; the 3 months start at "
+                     "the next open. Medians vs XBI.")
+        st.dataframe(sr, hide_index=True, width="stretch", column_config=_pct_cols(sr))
+        st.caption("A failed trial costs 65-75% in small companies. Companies call most readouts positive, and "
+                   "those move only a few percent; over the next 3 months they lag biotech most of the time. Stocks do "
+                   "not run up into readouts: the dates are rarely known in advance.")
+    sd = _cat("sec_dilution")
+    if not sd.empty:
+        st.subheader("Dilution alarm: after a big jump", help="Every 3-day jump of 30%+ vs XBI in these biotechs, "
+                     "and whether a stock offering (424B4/424B5) followed. A shelf is an S-3 filed in the 3 years before.")
+        st.dataframe(sd, hide_index=True, width="stretch", column_config=_pct_cols(sd))
+        st.caption("With a shelf on file, 1 in 6 small caps sells stock within 10 days of a jump, vs 1 in 25 "
+                   "without. After a positive readout jumps 20%+, 6 in 10 sell stock within 10 days. Either way the "
+                   "next 3 months usually trail biotech: taking profit into the jump beats holding it.")
+    rr = _cat("radar_rules")
+    if not rr.empty:
+        st.subheader("Speculation Radar rules on every S&P 500 stock")
+        st.dataframe(rr, hide_index=True, width="stretch", column_config=_pct_cols(rr, skip=("Stocks held on average",)
+                                                                                 + tuple(c for c in rr if "Sharpe" in c)))
+    kt = _cat("kalshi_tests")
+    if not kt.empty:
+        st.subheader("Kalshi odds as a signal", help="Fed-decision and recession odds since 2023; QQQ from the next day.")
+        st.dataframe(kt, hide_index=True, width="stretch", column_config=_pct_cols(kt, skip=("Corr. with next week",)))
+        st.caption("The odds move with the market, not ahead of it: correlations with QQQ's next week are near zero.")
+
+
+with tabs[3]:
+    catalyst_tab()
 
 st.caption("A backtest on one stock is one path of history. Rules tuned until they look perfect on the past usually "
            "disappoint in the future, so check them on other stocks too.")

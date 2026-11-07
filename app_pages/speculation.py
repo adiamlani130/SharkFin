@@ -207,6 +207,9 @@ with st.expander("Every name on the radar"):
     else:
         st.info("Live prices are unavailable right now.")
 
-st.caption("How to use this: watch for a theme moving from Quiet to Turning up while its 'what would prove it' list "
-           "starts coming true. Buy small, in pieces, and expect 50% drops along the way even when the idea is right.")
+st.caption("How to use this: the stages are a timing aid, not a buy signal. Tested on every S&P 500 stock since 2006, "
+           "buying each turn from Quiet to Turning up made about 4% a year against 10-13% for holding the average "
+           "stock; on these theme baskets it cut the worst drop from about -85% to -63% but gave up half the gain. "
+           "Use them to add to a theme whose 'what would prove it' list is coming true. Buy small, in pieces, and "
+           "expect 50% drops along the way even when the idea is right.")
 ui.disclaimer()
