@@ -55,19 +55,19 @@ def overview():
     for k in (LD, BR):
         f = pb.FACTS[k]
         cards.append(
-            f"<div class='sf-strat' style='--c:{pb.COLORS[k]}'><div class='nm'>{ui.h(k)}</div>"
+            f"<div class='sf-strat' style='--c:{ui.color(pb.COLORS[k])}'><div class='nm'>{ui.h(k)}</div>"
             f"<div class='tg'>{ui.h(TAGS[k])}</div><div class='big'>{f['return']:.1%}<span> a year</span></div>"
             f"<div class='sub'>Sharpe {f['sharpe']:.2f} · worst drop {abs(f['worst']):.0%} · 2022 {f['y2022']:+.0%}</div>"
             f"<div class='bl'>{ui.h(BLURB[k])}</div></div>")
     s, q = pb.FACTS[SPY], pb.FACTS[QQQ]
     cards.append(
-        f"<div class='sf-strat' style='--c:{pb.COLORS[SPY]}'><div class='nm'>The yardstick</div>"
+        f"<div class='sf-strat' style='--c:{ui.color(pb.COLORS[SPY])}'><div class='nm'>The yardstick</div>"
         f"<div class='tg'>Buy and hold</div><div class='big'>{s['return']:.1%}<span> a year (SPY)</span></div>"
         f"<div class='sub'>Sharpe {s['sharpe']:.2f} · worst drop {abs(s['worst']):.0%} · 2022 {s['y2022']:+.0%}</div>"
         f"<div class='bl'>QQQ made {q['return']:.1%} a year, Sharpe {q['sharpe']:.2f}, worst drop {abs(q['worst']):.0%}."
         "</div></div>")
     cards.append(
-        "<div class='sf-strat' style='--c:#ff7a93'><div class='nm'>Dropped in Nov 2026</div>"
+        "<div class='sf-strat' style='--c:var(--sf-down)'><div class='nm'>Dropped in Nov 2026</div>"
         "<div class='tg'>Didn't make the cut</div><div class='big'>4<span> ideas cut</span></div>"
         "<div class='sub'>TQQQ Day + Night, Classic Dive Zone, momentum rotation, fear buying</div>"
         "<div class='bl'>And none of 18 VIX, GEX and crash filters improved the two that stayed. See What we tested."

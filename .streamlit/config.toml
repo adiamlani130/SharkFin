@@ -1,14 +1,6 @@
+# Day mode = [theme.light], night mode = [theme.dark]. The switch in the top-right corner picks one; with no choice
+# saved, the app follows the device's light / dark setting. SharkFin's own cards and chart colors are in sharkfin/ui.py.
 [theme]
-base = "dark"
-primaryColor = "#3fa9e0"
-backgroundColor = "#06101a"
-secondaryBackgroundColor = "#0d1b28"
-textColor = "#e4edf3"
-borderColor = "#172a3b"
-dataframeBorderColor = "#152636"
-dataframeHeaderBackgroundColor = "#0b1824"
-linkColor = "#8fcdf2"
-linkUnderline = false
 font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
 headingFont = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
 codeFont = "IBM Plex Mono:https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap, monospace"
@@ -19,12 +11,43 @@ baseRadius = "0.55rem"
 metricValueFontSize = "1.5rem"
 metricValueFontWeight = 500
 showWidgetBorder = true
+linkUnderline = false
+
+[theme.light]
+primaryColor = "#db2777"
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#fff1f2"
+textColor = "#2b1b24"
+borderColor = "#f1d9df"
+dataframeBorderColor = "#f5e3e7"
+dataframeHeaderBackgroundColor = "#fff4f5"
+linkColor = "#c2185b"
+greenColor = "#059669"
+redColor = "#e11d48"
+chartCategoricalColors = ["#db2777", "#059669", "#ea580c", "#7c3aed", "#e11d48", "#0891b2", "#0d9488", "#ca8a04"]
+
+[theme.light.sidebar]
+backgroundColor = "#fff8f7"
+secondaryBackgroundColor = "#ffeef1"
+borderColor = "#f6e1e6"
+
+[theme.dark]
+primaryColor = "#6d8cff"
+backgroundColor = "#05060d"
+secondaryBackgroundColor = "#11142a"
+textColor = "#e6e8f4"
+borderColor = "#1e2340"
+dataframeBorderColor = "#1a1e36"
+dataframeHeaderBackgroundColor = "#0e1124"
+linkColor = "#a3b6ff"
+greenColor = "#34d399"
+redColor = "#fb7185"
 chartCategoricalColors = ["#4ea8ff", "#2dd4a3", "#f5a524", "#a78bfa", "#ff5c7a", "#f472b6", "#5eead4", "#facc15"]
 
-[theme.sidebar]
-backgroundColor = "#050d16"
-secondaryBackgroundColor = "#0b1824"
-borderColor = "#12212f"
+[theme.dark.sidebar]
+backgroundColor = "#04050b"
+secondaryBackgroundColor = "#0e1124"
+borderColor = "#151830"
 
 [client]
 toolbarMode = "minimal"

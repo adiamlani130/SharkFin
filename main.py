@@ -38,7 +38,8 @@ from sharkfin import ui  # noqa: E402  (after set_page_config)
 ui.setup()
 
 here = Path(__file__).parent
-wordmark, icon = here / "sharkfin_wordmark.png", here / "sharkfin_icon.png"
+wordmark = here / ("sharkfin_wordmark_day.png" if ui.mode() == "day" else "sharkfin_wordmark.png")
+icon = here / "sharkfin_icon.png"
 if wordmark.exists():
     st.logo(str(wordmark), size="large", icon_image=str(icon) if icon.exists() else None)
 
