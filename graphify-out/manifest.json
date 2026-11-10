@@ -192,9 +192,9 @@
     "semantic_hash": ""
   },
   "sharkfin/ui.py": {
-    "mtime": 1794270850.9379044,
-    "seen": 1794271067.3662958,
-    "ast_hash": "1fcebed4005790344e4b2ba1aee04756",
+    "mtime": 1794286948.077925,
+    "seen": 1794287017.8667047,
+    "ast_hash": "fff0ac3b254fb43cbfb31e94a64c5612",
     "semantic_hash": ""
   },
   "sharkfin/valuation.py": {
@@ -435,6 +435,18 @@
     "mtime": 1794270575.4850214,
     "seen": 1794271067.3663313,
     "ast_hash": "14884d5ebd509c7c2ce3368c70d32df2",
+    "semantic_hash": ""
+  },
+  "docs/screenshots/themes-day.jpg": {
+    "mtime": 1794271067.8050506,
+    "seen": 1794287017.8667254,
+    "ast_hash": "c03f0f9be884c3eaea32eff01cab4348",
+    "semantic_hash": ""
+  },
+  "docs/screenshots/themes-night.jpg": {
+    "mtime": 1794271067.8970506,
+    "seen": 1794287017.8667269,
+    "ast_hash": "baaad2fe531d32abb691ee79182ea8c4",
     "semantic_hash": ""
   }
 }

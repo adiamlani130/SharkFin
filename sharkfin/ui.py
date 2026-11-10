@@ -305,8 +305,8 @@ html {scroll-behavior: smooth;}
 [data-testid="stSidebar"] {transition: transform .35s var(--sf-ease), width .35s var(--sf-ease) !important;}
 /* a calmer "running" shimmer instead of the stock flicker while a page recomputes */
 [data-stale="true"] {opacity: .55 !important; transition: opacity .4s ease .15s !important;}
-/* ---------- day / night switch (top right) ---------- */
-#sf-mode {position: fixed; top: .62rem; right: 4.2rem; z-index: 1000002; display: flex; gap: 2px; padding: 3px;
+/* ---------- day / night switch (bottom-left corner) ---------- */
+#sf-mode {position: fixed; left: .9rem; bottom: .9rem; z-index: 1000002; display: flex; gap: 2px; padding: 3px;
   border-radius: 999px; background: var(--sf-panel-a); border: 1px solid var(--sf-line); backdrop-filter: blur(12px);
   box-shadow: 0 6px 20px -12px rgba(var(--sf-shadow-rgb),.6); font-family: 'IBM Plex Sans', sans-serif;}
 #sf-mode button {display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; cursor: pointer;
@@ -318,7 +318,8 @@ html {scroll-behavior: smooth;}
 #sf-mode button[aria-pressed="true"] {background: var(--sf-grad); color: #fff; cursor: default;
   box-shadow: 0 4px 14px -6px rgba(var(--sf-accent-rgb),.7);}
 #sf-mode button:focus-visible {outline: 2px solid var(--sf-link); outline-offset: 1px;}
-@media (max-width: 640px) {#sf-mode {right: 3.4rem;} #sf-mode span {display: none;} #sf-mode button {padding: 6px 8px;}}
+@media (max-width: 640px) {#sf-mode {left: .6rem; bottom: .6rem;} #sf-mode span {display: none;} #sf-mode button {padding: 6px 8px;}}
+[data-testid="stSidebarContent"] {padding-bottom: 3.6rem;}
 html.sf-switching body {opacity: 0; transition: opacity .2s ease;}
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {animation-duration: .01ms !important; animation-delay: 0s !important;
