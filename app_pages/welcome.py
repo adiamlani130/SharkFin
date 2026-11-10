@@ -16,7 +16,7 @@ CSS = """
 html, body {background: #040b13;}
 .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"], [data-testid="stHeader"] {background: transparent !important;}
 [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="stExpandSidebarButton"],
-[data-testid="stHeaderLogo"], [data-testid="stHeaderActionElements"] {display: none !important;}
+[data-testid="stHeaderLogo"], [data-testid="stHeaderActionElements"], #sf-mode {display: none !important;}
 .block-container {padding-top: 8vh !important; padding-bottom: 6rem; max-width: 1180px;}
 
 .st-key-sf-ocean iframe {position: fixed !important; inset: 0; width: 100vw !important; height: 100vh !important;

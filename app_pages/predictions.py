@@ -122,7 +122,7 @@ for it in dv["items"]:
                 f"{ui.h(it['why'])}</span></div>")
 if not rows:
     rows.append("<div class='sf-driver'><span class='sf-muted'>No earnings, estimate or news data for this stock.</span></div>")
-st.markdown(f"<div class='sf-today' style='--c:#3fa9e0'><div class='tx'>{ui.h(dv['summary'])}</div>"
+st.markdown(f"<div class='sf-today' style='--c:var(--sf-accent)'><div class='tx'>{ui.h(dv['summary'])}</div>"
             f"<div class='sf-drivers'>{''.join(rows)}</div></div>", unsafe_allow_html=True)
 
 # ---- Earnings and catalysts ------------------------------------------------------------------

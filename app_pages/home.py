@@ -97,7 +97,7 @@ if not rows:
     rows.append("<div class='sf-driver'><span class='sf-muted'>No single big driver today: oil, rates, the dollar and "
                 "the headlines are all moving within their normal range.</span></div>")
 
-st.markdown(f"<div class='sf-today' style='--c:{color}'><div class='hd'><span class='lb'>{ui.h(today['label'])}</span>"
+st.markdown(f"<div class='sf-today' style='--c:{ui.color(color)}'><div class='hd'><span class='lb'>{ui.h(today['label'])}</span>"
             f"{ui.pill(status, 'pos' if status == 'Open' else 'neu')}</div><div class='tx'>{ui.h(today['text'])}</div>"
             f"<div class='st'>{stats_html}</div>"
             f"<div class='sf-drivers'><div class='sf-muted'>What's driving it</div>{''.join(rows)}</div></div>",
