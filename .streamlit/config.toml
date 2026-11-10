@@ -1,4 +1,4 @@
-# Day mode = [theme.light], night mode = [theme.dark]. The switch in the top-right corner picks one; with no choice
+# Day mode = [theme.light], night mode = [theme.dark]. The switch in the bottom-left corner picks one; with no choice
 # saved, the app follows the device's light / dark setting. SharkFin's own cards and chart colors are in sharkfin/ui.py.
 [theme]
 font = "IBM Plex Sans:https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap, sans-serif"
