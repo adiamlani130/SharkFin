@@ -22,7 +22,8 @@ ui.header("Forecasts",
 c1, c2 = st.columns([3, 6], vertical_alignment="bottom")
 with c1:
     sym = ui.symbol_picker("pred")
-horizon_lbl = c2.segmented_control("Timeframe", list(drivers.HORIZONS), default="3 months", help=tip("horizon"),
+horizon_lbl = c2.segmented_control("Timeframe", list(drivers.HORIZONS),
+                                   default=None if "pred_h" in st.session_state else "3 months", help=tip("horizon"),
                                    key="pred_h") or "3 months"
 H = drivers.HORIZONS[horizon_lbl]
 

@@ -795,6 +795,100 @@ def alerts_box():
             (st.success if ok else st.error)("Sent: check your phone." if ok else "Couldn't reach ntfy.sh.")
 
 
+def _resolve(query: str) -> str | None:
+    q = (query or "").strip()
+    if not q:
+        return None
+    matches = data.search(q)
+    exact = [m for m in matches if m[0].upper() == q.upper().replace(" ", "")]
+    return (exact or matches)[0][0] if (exact or matches) else (q.upper() if re.fullmatch(r"[A-Za-z.\-]{1,6}", q) else None)
+
+
+def run_command(cmd) -> None:
+    """Carry out a parsed voice/typed command (see ``sharkfin.voice``)."""
+    ss = st.session_state
+    if cmd.action in ("forecast", "research", "add", "watch"):
+        sym = _resolve(cmd.query)
+        if not sym:
+            ss._sf_cmd_msg = ("warning", f"Couldn't find a stock called \u201c{cmd.query}\u201d.")
+            return
+        if cmd.action in ("forecast", "research"):
+            ss.symbol = sym
+            for k in ("pred_q", "pred_sel", "research_q", "research_sel"):
+                ss.pop(k, None)
+            if cmd.action == "forecast":
+                ss.pred_h = cmd.horizon or "3 months"
+                st.switch_page("app_pages/predictions.py")
+            st.switch_page("app_pages/research.py")
+        if cmd.action == "watch":
+            if sym not in ss.watchlist:
+                ss.watchlist.append(sym)
+                save_state()
+            ss._sf_cmd_msg = ("success", f"Added {sym} to your watchlist.")
+            return
+        price = cmd.price or data.price_of(data.info(sym))
+        if not cmd.shares or not np.isfinite(price):
+            ss._sf_cmd_msg = ("warning", f"Couldn't price {sym}; add it on the Portfolio page instead.")
+            return
+        ss.portfolio.append({"symbol": sym, "shares": float(cmd.shares), "buy_price": float(price), "date": None})
+        save_state()
+        ss._sf_cmd_msg = ("success", f"Added {cmd.shares:g} shares of {sym} at ${price:,.2f}.")
+        return
+    if cmd.action == "page":
+        st.switch_page(cmd.page)
+    if cmd.action == "brief":
+        ss._sf_brief = True
+        return
+    if cmd.action == "ask":
+        ss._sf_ask = cmd.text
+        return
+
+
+def voice_box():
+    """Sidebar 'Hey SharkFin' box: speak (browser speech) or type a command."""
+    from . import ai, voice
+
+    ss = st.session_state
+    with st.expander("Hey SharkFin", icon=":material/mic:", expanded=bool(ss.get("_sf_cmd_open"))):
+        heard, supported = voice.mic()
+        if supported is False and voice.whisper_available():
+            clip = st.audio_input("Record a command", key="sf_audio", label_visibility="collapsed")
+            if clip is not None and ss.get("_sf_clip_id") != clip.file_id:
+                ss._sf_clip_id = clip.file_id
+                heard = voice.transcribe(clip.getvalue())
+        typed = st.chat_input("…or type a command", key="sf_cmd_text")
+        text = heard or typed
+        if text:
+            ss._sf_cmd_open = True
+            cmd = voice.parse(text)
+            ss._sf_cmd_last = f"\u201c{text}\u201d \u2192 {cmd.describe()}"
+            run_command(cmd)
+        if ss.get("_sf_cmd_last"):
+            st.caption(ss._sf_cmd_last)
+        else:
+            st.caption("Try \u201cforecast NVDA for a month\u201d, \u201cadd 10 shares of Apple at 180\u201d or "
+                       "\u201cread me today's market brief\u201d.")
+        msg = ss.pop("_sf_cmd_msg", None)
+        if msg:
+            getattr(st, msg[0])(msg[1])
+        if ss.pop("_sf_brief", False):
+            ss._sf_brief_text = voice.brief_text(ss.get("portfolio"))
+        if ss.get("_sf_brief_text"):
+            st.write(ss._sf_brief_text)
+            voice.speak_button(ss._sf_brief_text, "Read it aloud", key="sf_speak_brief")
+        q = ss.pop("_sf_ask", None)
+        if q:
+            if ai.available():
+                st.write_stream(ai.stream_answer(q))
+            else:
+                st.caption("Try: \u201cforecast NVDA for a month\u201d, \u201cadd 10 shares of Apple at 180\u201d, "
+                           "\u201copen the playbook\u201d or \u201cread me today's market brief\u201d. Open questions "
+                           "need the AI analyst (an Anthropic API key).")
+        if st.button("Today's market brief", key="sf_brief_btn", width="stretch"):
+            ss._sf_brief_text = voice.brief_text(ss.get("portfolio"))
+            st.rerun()
+
+
 def guest_notice():
     """One line on pages that edit personal data, telling guests their changes won't be kept."""
     if store.identity().mode == "guest":

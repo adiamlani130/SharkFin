@@ -51,6 +51,52 @@ with st.expander("Import or export (CSV)"):
         pd.DataFrame(ss.portfolio).to_csv(buf, index=False)
         st.download_button("Export portfolio CSV", buf.getvalue(), "sharkfin_portfolio.csv", "text/csv")
 
+with st.expander("Import from a screenshot", icon=":material/photo_camera:"):
+    from sharkfin import ai, screenshot_import as shot
+
+    use_ai, use_ocr = ai.available(), shot.tesseract_available()
+    if not (use_ai or use_ocr):
+        st.caption("Screenshot import needs the Tesseract OCR engine (packages.txt) or an Anthropic API key.")
+    else:
+        st.caption("Upload or snap your brokerage's positions screen. "
+                   + ("Claude reads it." if use_ai else "Free OCR reads it; check every number, it misreads busy screens.")
+                   + " Nothing is added until you click **Add these positions**. Leave the cost empty to use today's price.")
+        img = st.file_uploader("Screenshot", type=["png", "jpg", "jpeg", "webp"], key="shot_up", label_visibility="collapsed")
+        if img is not None and st.button("Read screenshot", key="shot_read"):
+            with st.spinner("Reading…"):
+                try:
+                    raw = img.getvalue()
+                    rows = (shot.claude_positions(raw, img.type or "image/png") if use_ai
+                            else shot.parse_positions(shot.ocr_text(raw)))
+                except Exception as e:
+                    rows = []
+                    st.error(f"Couldn't read it ({e.__class__.__name__}).")
+            ss.shot_rows = rows
+            if not rows:
+                st.warning("No positions found. Try a tighter crop of just the holdings list.")
+        if ss.get("shot_rows"):
+            draft = st.data_editor(pd.DataFrame(ss.shot_rows, columns=["symbol", "shares", "buy_price"]),
+                                   num_rows="dynamic", width="stretch", key="shot_edit",
+                                   column_config={"symbol": "Ticker", "shares": st.column_config.NumberColumn("Shares"),
+                                                  "buy_price": st.column_config.NumberColumn("Cost per share ($)", format="$%.2f")})
+            if st.button("Add these positions", type="primary", key="shot_add"):
+                added = 0
+                for r in draft.to_dict("records"):
+                    sym = str(r.get("symbol") or "").upper().strip()
+                    sh = float(r.get("shares") or 0)
+                    if not sym or not np.isfinite(sh) or sh <= 0:
+                        continue
+                    cost = r.get("buy_price")
+                    cost = float(cost) if cost is not None and np.isfinite(float(cost)) and float(cost) > 0 \
+                        else data.price_of(data.info(sym))
+                    if np.isfinite(cost):
+                        ss.portfolio.append({"symbol": sym, "shares": sh, "buy_price": cost, "date": None})
+                        added += 1
+                ss.pop("shot_rows", None)
+                ui.save_state()
+                st.toast(f"Added {added} position{'s' if added != 1 else ''}.")
+                st.rerun()
+
 ui.alerts_box()
 
 if not ss.portfolio:

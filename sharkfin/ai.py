@@ -95,3 +95,23 @@ def stream_report(dossier: dict) -> Iterator[str]:
         yield f"Anthropic API error ({e.status_code}): {e.message}"
     except anthropic.APIConnectionError:
         yield "Could not reach the Anthropic API."
+
+
+ASK_SYSTEM = """You are SharkFin's market assistant, answering a spoken question from an investor in two to five short
+sentences of plain English suitable for reading aloud. You have no live data in this conversation: say so when the
+answer depends on today's prices, and suggest the SharkFin page that has it (Research, Forecasts, Top Performers,
+Strategy Playbook, Portfolio). Never promise returns or tell someone to buy or sell. Not investment advice."""
+
+
+def stream_answer(question: str) -> Iterator[str]:
+    """Short spoken-style answer to an open question (voice box)."""
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key())
+    try:
+        with client.messages.stream(model=MODEL, max_tokens=600, system=ASK_SYSTEM,
+                                    messages=[{"role": "user", "content": question[:1000]}]) as stream:
+            for text in stream.text_stream:
+                yield text
+    except anthropic.APIError as e:
+        yield f"The AI analyst is unavailable right now ({e.__class__.__name__})."
