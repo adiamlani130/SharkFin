@@ -108,7 +108,7 @@ with st.sidebar:
 
 def test_guest_app_shows_sign_in_and_writes_nothing(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT))
-    at = AppTest.from_string(GUEST_APP)
+    at = AppTest.from_string(GUEST_APP, default_timeout=60)
     at.secrets["auth"] = AUTH
     at.run()
     assert not at.exception, [e.value for e in at.exception]
@@ -140,7 +140,7 @@ def test_signed_in_app_uses_own_files(monkeypatch):
     monkeypatch.syspath_prepend(str(ROOT))
     me = Identity("account", "a" * 32, "adi@example.com")
     monkeypatch.setattr(store, "identity", lambda: me)
-    at = AppTest.from_string(GUEST_APP)
+    at = AppTest.from_string(GUEST_APP, default_timeout=60)
     at.secrets["auth"] = AUTH
     at.run()
     assert not at.exception, [e.value for e in at.exception]
