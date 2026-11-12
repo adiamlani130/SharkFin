@@ -211,4 +211,5 @@ create table if not exists public.{TABLE} (
 -- Row level security on with no policies: the public (anon/publishable) key can read and write nothing.
 -- Only SharkFin's server, holding the secret key, can reach this table.
 alter table public.{TABLE} enable row level security;
+grant select, insert, update on public.{TABLE} to service_role;
 """

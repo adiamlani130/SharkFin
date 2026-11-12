@@ -30,8 +30,11 @@ replace a saved portfolio with an empty one.
      primary key (user_id, name)
    );
    alter table public.sharkfin_user_data enable row level security;
+   grant select, insert, update on public.sharkfin_user_data to service_role;
    ```
 
+   When creating the project: keep **Enable Data API** on, turn **Automatically expose new tables** off, and turn
+   **Enable automatic RLS** on. The `grant` line gives only SharkFin's server key access to this one table.
    Row level security is on with no policies, so the public ("anon" / "publishable") key can't read or write
    anything. Only the secret key, which stays in SharkFin's server secrets, can reach the table.
 3. Go to **Project Settings → API Keys**. Copy the **Project URL** and a **secret** key (starts with `sb_secret_`).
