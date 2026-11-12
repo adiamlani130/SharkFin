@@ -24,7 +24,7 @@ from pathlib import Path
 import requests
 
 DATA_DIR = Path(".sharkfin")
-USER_LISTS = frozenset({"portfolio", "watchlist", "my_swing_strategy", "swing_choice"})
+USER_LISTS = frozenset({"portfolio", "watchlist", "my_swing_strategy", "swing_choice", "alerts", "alert_state"})
 TABLE = "sharkfin_user_data"
 TIMEOUT = 8
 
@@ -78,8 +78,13 @@ def auth_configured() -> bool:
 
 
 def supabase_config() -> tuple[str, str] | None:
+    """[supabase] url/key from Streamlit secrets, else SUPABASE_URL / SUPABASE_KEY from the environment
+    (the daily alerts job runs outside Streamlit)."""
+    import os
+
     s = _section("supabase")
-    url, key = str(s.get("url", "")).rstrip("/"), str(s.get("key", ""))
+    url = str(s.get("url") or os.environ.get("SUPABASE_URL", "")).rstrip("/")
+    key = str(s.get("key") or os.environ.get("SUPABASE_KEY", ""))
     return (url, key) if url and key else None
 
 
@@ -165,6 +170,18 @@ def _cloud_write(name: str, uid: str, rows: list) -> None:
         r.raise_for_status()
     except Exception as e:
         raise StoreError(f"couldn't save your {name.replace('_', ' ')} ({e.__class__.__name__})") from e
+
+
+def cloud_all(name: str) -> dict:
+    """{user_id: list} for every user who saved ``name`` (for the daily alerts job). Raises StoreError."""
+    url, key = supabase_config()
+    try:
+        r = requests.get(f"{url}/rest/v1/{TABLE}", headers=_headers(key), timeout=TIMEOUT * 3,
+                         params={"name": f"eq.{name}", "select": "user_id,data"})
+        r.raise_for_status()
+        return {row["user_id"]: row.get("data") or [] for row in r.json()}
+    except Exception as e:
+        raise StoreError(f"couldn't list saved {name} ({e.__class__.__name__})") from e
 
 
 # ---------------------------------------------------------------------------

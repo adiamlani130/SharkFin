@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from sharkfin import data, portfolio, risk, ui
+from sharkfin import data, portfolio, risk, threat, ui
 
 ui.header("Portfolio", "Your holdings with live profit and loss, how risky the mix really is, and what a better-balanced version would look like.")
 ss = st.session_state
@@ -51,6 +51,8 @@ with st.expander("Import or export (CSV)"):
         pd.DataFrame(ss.portfolio).to_csv(buf, index=False)
         st.download_button("Export portfolio CSV", buf.getvalue(), "sharkfin_portfolio.csv", "text/csv")
 
+ui.alerts_box()
+
 if not ss.portfolio:
     st.info("Add your first position to see live P/L, risk analytics and optimised allocations.")
     st.stop()
@@ -83,6 +85,13 @@ ui.metrics([
     {"label": "Positions", "value": str(len(pos))},
 ], key="pf")
 
+# ---- Threat level ---------------------------------------------------------------------------
+infos = data.infos(syms)
+vix_h = data.history("^VIX", "1y")
+th = threat.assess(px, pos["weight"], infos.get("sector"), threat.next_earnings(infos),
+                   float(vix_h["Close"].iloc[-1]) if not vix_h.empty else np.nan)
+ui.threat_banner(th)
+
 st.dataframe(pos[["shares", "avg_cost", "price", "value", "weight", "pnl", "pnl_pct", "day_pnl"]], width="stretch",
              column_config={"shares": st.column_config.NumberColumn("Shares", format="%.4g"),
                             "avg_cost": st.column_config.NumberColumn("Avg cost", format="$%.2f"),
@@ -108,7 +117,6 @@ with tabs[0]:
     fig.update_layout(title="By holding", showlegend=False)
     with l:
         ui.plotly(fig, 380)
-    infos = data.infos(syms)
     sec = infos.get("sector", pd.Series(index=infos.index, dtype=object)).fillna("Other / ETF")
     by_sec = pos["value"].groupby(sec.reindex(pos.index).fillna("Other / ETF")).sum()
     fig = go.Figure(go.Pie(labels=by_sec.index, values=by_sec.values, hole=0.55, textinfo="label+percent"))

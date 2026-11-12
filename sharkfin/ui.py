@@ -649,6 +649,23 @@ def hero(label: str, value: str, sub: str = "", badge: str = ""):
                 f"<div class='s'>{sub}</div></div>", unsafe_allow_html=True)
 
 
+def threat_banner(th) -> None:
+    """LOW / MEDIUM / HIGH banner for a ``threat.Threat``, with the signs behind the score."""
+    tone_, edge = {"LOW": ("pos", "--sf-up"), "MEDIUM": ("neu", "--sf-neu-ink"), "HIGH": ("neg", "--sf-down")}[th.level]
+    hits = th.triggered
+    sub = ("Nothing on the checklist is flashing." if not hits else
+           "Driven by: " + "; ".join(f"{h(x['name'].lower())} ({h(x['detail'])})" for x in
+                                     sorted(hits, key=lambda x: -x["points"])[:3]) + ".")
+    st.markdown(f"<div class='sf-hero' style='border-left-color: var({edge})'><div class='k'>Portfolio threat level</div>"
+                f"<div class='v'>{pill(th.level, tone_)} {th.score:.0f}<span style='font-size:1rem;opacity:.6'> / 100</span>"
+                f"</div><div class='s'>{sub}</div></div>", unsafe_allow_html=True)
+    with st.expander("How the threat level is scored"):
+        st.dataframe(pd.DataFrame([{"Sign": x["name"], "Points": x["points"], "Max": x["max"], "Now": x["detail"]}
+                                   for x in th.signs]), hide_index=True, width="stretch")
+        st.caption("0-24 LOW, 25-49 MEDIUM, 50+ HIGH. A rule-of-thumb checklist of warning signs, not a tested "
+                   "forecast: a HIGH reading means \"look closer\", not \"sell\".")
+
+
 def news_item(a: dict, show_summary: bool = True, sentiment_pill: bool = True):
     from .sentiment import clean_text
 
@@ -740,6 +757,42 @@ def account_box():
                           "Google lets you use a passkey (Face ID, Touch ID, Windows Hello)."):
             st.login()
         st.caption("Guest mode: your portfolio is kept for this visit only.")
+
+
+def alerts_box():
+    """Phone-alert settings (ntfy topic + what to send). Saved per account; the daily job reads them."""
+    from . import alerts
+
+    with st.expander("Phone alerts after the close", icon=":material/notifications:"):
+        who = store.identity()
+        if who.mode != "cloud":
+            st.caption("Sign in (sidebar) to get daily alerts on your phone." if who.mode == "guest" else
+                       "Phone alerts need sign-in and Supabase set up (see docs/SIGN_IN_SETUP.md).")
+            return
+        saved = (_load("alerts") or [{}])[0]
+        cfg = {**alerts.DEFAULTS, **(saved if isinstance(saved, dict) else {})}
+        if not cfg["topic"]:
+            cfg["topic"] = st.session_state.setdefault("_sf_new_topic", alerts.new_topic())
+        st.markdown("1. Install the free **ntfy** app ([iPhone](https://apps.apple.com/app/ntfy/id1625396347) · "
+                    "[Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)).\n"
+                    "2. In the app, tap **+** and subscribe to the topic below.\n"
+                    "3. Pick what you want and click **Save alerts**. Alerts arrive on weekdays after the close.")
+        topic = st.text_input("Your private topic", cfg["topic"], key="sf_ntfy_topic",
+                              help="Works like a password: anyone who knows it can read your alerts. Keep it long and random.")
+        st.code(topic, language=None)
+        c = st.columns(3)
+        sig = c[0].toggle("New Dive Zone / Breakout buys", cfg["signals"], key="sf_al_sig")
+        hold = c[1].toggle("Exit signals on my holdings", cfg["holdings"], key="sf_al_hold")
+        thr = c[2].toggle("Threat level rises or is HIGH", cfg["threat"], key="sf_al_thr")
+        b = st.columns(2)
+        if b[0].button("Save alerts", type="primary", key="sf_al_save"):
+            if not alerts.valid_topic(topic):
+                st.error("Use 16-64 letters, numbers, - or _.")
+            elif _save("alerts", [{"topic": topic, "signals": sig, "holdings": hold, "threat": thr}]):
+                st.success("Saved. You'll get alerts after the next close.")
+        if b[1].button("Send a test", key="sf_al_test"):
+            ok = alerts.send(topic, "SharkFin test", "Alerts are working. You'll hear from SharkFin after the close.")
+            (st.success if ok else st.error)("Sent: check your phone." if ok else "Couldn't reach ntfy.sh.")
 
 
 def guest_notice():
