@@ -11,6 +11,7 @@ from sharkfin import data, portfolio, risk, ui
 
 ui.header("Portfolio", "Your holdings with live profit and loss, how risky the mix really is, and what a better-balanced version would look like.")
 ss = st.session_state
+ui.guest_notice()
 
 # ---- Add / import ---------------------------------------------------------------------
 with st.expander("Add a position", expanded=not ss.portfolio):
