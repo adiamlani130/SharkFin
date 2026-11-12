@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
-from . import data
+from . import data, store
 
 # Chart colors. Pages build figures with these night-mode values; ui.plotly() swaps them for their day-mode
 # equivalents (DAY_COLORS) when the viewer is in day mode, so pages never need to know the mode.
@@ -25,7 +25,7 @@ PURPLE = "#a78bfa"
 BG, PANEL, GRID, BORDER = "#05060d", "#0c0e1c", "#181c31", "#1e2340"
 DIVERGING = [[0, "#9b2c45"], [0.5, "#151a2e"], [1, "#167a5f"]]
 MA_COLORS = {"SMA 20": PURPLE, "EMA 20": PURPLE, "EMA 21": "#f472b6", "SMA 50": BLUE, "SMA 200": ORANGE}
-DATA_DIR = Path(".sharkfin")
+DATA_DIR = store.DATA_DIR
 
 # Night color -> day color. Keys are lowercase; rgba keys are prefixes so any opacity carries over.
 DAY_COLORS = {
@@ -675,26 +675,38 @@ def news_item(a: dict, show_summary: bool = True, sentiment_pill: bool = True):
 # ---------------------------------------------------------------------------
 
 
-def _path(name: str) -> Path:
-    # Keep backward compatibility with the old root-level JSON files.
-    legacy = Path(f"{name}.json")
-    return legacy if legacy.exists() else DATA_DIR / f"{name}.json"
-
-
 def _load(name: str) -> list:
+    """A saved list for whoever is using the app (see ``sharkfin.store``). A cloud read that fails returns []
+    and blocks saving that list for the rest of the visit, so an outage can't overwrite good data."""
     try:
-        d = json.loads(_path(name).read_text())
-        return d if isinstance(d, list) else []
-    except Exception:
+        return store.load(name)
+    except store.StoreError as e:
+        st.session_state.setdefault("_sf_unsaved", set()).add(name)
+        st.toast(f"Heads up: {e}. Changes won't be saved until it's back.")
         return []
+
+
+def _save(name: str, rows: list) -> bool:
+    if name in st.session_state.get("_sf_unsaved", set()):
+        return False
+    try:
+        return store.save(name, rows)
+    except store.StoreError as e:
+        st.toast(f"Could not save: {e}")
+        return False
 
 
 def init_state():
     ss = st.session_state
-    if "portfolio" not in ss:
+    who = store.identity()
+    if ss.get("_sf_owner") != who.key:  # first run, or the visitor signed in / out: show their own data
+        ss.pop("_sf_unsaved", None)
         ss.portfolio = _load("portfolio")
-    if "watchlist" not in ss:
         ss.watchlist = _load("watchlist")
+        ss.pop("swing_choice", None)
+        ss._sf_owner = who.key
+    ss.setdefault("portfolio", [])
+    ss.setdefault("watchlist", [])
     ss.setdefault("symbol", "AAPL")
 
 
@@ -704,23 +716,37 @@ def load_list(name: str) -> list:
 
 
 def save_list(name: str, rows: list) -> bool:
-    try:
-        p = DATA_DIR / f"{name}.json"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(rows, indent=1, default=str))
-        return True
-    except Exception:
-        return False
+    return _save(name, rows)
 
 
 def save_state():
-    try:
-        for name in ("portfolio", "watchlist"):
-            p = _path(name)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(json.dumps(st.session_state[name], indent=2, default=str))
-    except Exception as e:
-        st.toast(f"Could not save: {e}")
+    for name in ("portfolio", "watchlist"):
+        _save(name, st.session_state[name])
+
+
+def account_box():
+    """Sign-in / sign-out in the sidebar. Shows nothing when sign-in isn't set up (e.g. running locally)."""
+    who = store.identity()
+    if who.mode == "local":
+        return
+    if who.signed_in:
+        st.caption(f"Signed in as {who.email or who.name or 'you'}"
+                   + ("" if who.mode == "cloud" else " · saved on this server only"))
+        if st.button("Sign out", key="sf_logout", width="stretch"):
+            st.logout()
+    else:
+        if st.button("Sign in with Google", key="sf_login", type="primary", width="stretch",
+                     help="Keeps your portfolio, watchlist and swing strategy private and saved. "
+                          "Google lets you use a passkey (Face ID, Touch ID, Windows Hello)."):
+            st.login()
+        st.caption("Guest mode: your portfolio is kept for this visit only.")
+
+
+def guest_notice():
+    """One line on pages that edit personal data, telling guests their changes won't be kept."""
+    if store.identity().mode == "guest":
+        st.info("You're browsing as a guest, so this portfolio and watchlist last only for this visit. "
+                "Sign in (sidebar) to keep them private and saved.", icon=":material/lock:")
 
 
 def my_swing_rules() -> dict | None:
