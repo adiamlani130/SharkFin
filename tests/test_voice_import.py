@@ -74,3 +74,14 @@ def test_typed_brief(offline):
     at.chat_input(key="sf_cmd_text").set_value("read me today's market brief").run()
     assert not at.exception, [e.value for e in at.exception]
     assert "S and P 500" in at.session_state["_sf_brief_text"]
+
+
+def test_oversized_image_refused_before_decoding():
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("L", (1500, 14000), 255).save(buf, "PNG")  # 21M pixels, compresses to almost nothing
+    with pytest.raises(ValueError, match="too large"):
+        shot.ocr_text(buf.getvalue())

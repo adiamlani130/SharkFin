@@ -21,6 +21,9 @@ STOP = {"USD", "ETF", "INC", "LLC", "CORP", "CO", "LTD", "CASH", "TOTAL", "BUY",
         "AND", "OF", "PL", "P/L", "YTD", "ACCT", "IRA", "ROTH", "SYMBOL", "NAME", "LAST", "CHANGE", "EQUITY", "A",
         "I", "AM", "PM", "ET", "EST", "EDT", "CLASS", "PLC", "SA", "NV", "AG", "SE", "ADR", "OK", "NEW", "LIMIT",
         "OPEN", "CLOSE", "HIGH", "LOW", "VOL", "MKT", "QUANTITY", "POSITIONS", "HOLDINGS", "RETURN", "PERCENT"}
+MAX_PIXELS = 20_000_000  # a phone screenshot is ~4M; anything far bigger is refused before decoding
+MAX_SIDE = 12_000
+MAX_BYTES = 8_000_000
 TICKER = re.compile(r"(?<![A-Za-z$])([A-Z]{1,5}(?:\.[A-Z])?)(?![a-z])")
 NUM = re.compile(r"(?<![\w.])(-?\$?\(?-?[\d,]*\.?\d+\)?%?)(?![\w])")
 
@@ -92,11 +95,15 @@ def ocr_text(image_bytes: bytes) -> str:
     import pytesseract
     from PIL import Image, ImageOps, ImageStat
 
-    img = Image.open(io.BytesIO(image_bytes)).convert("L")
+    img = Image.open(io.BytesIO(image_bytes))  # lazy: only the header is read here
+    w, h = img.size
+    if w * h > MAX_PIXELS or max(w, h) > MAX_SIDE:
+        raise ValueError("image too large")
+    img = img.convert("L")
     if ImageStat.Stat(img).mean[0] < 110:  # dark mode
         img = ImageOps.invert(img)
-    if img.width < 1600:
-        img = img.resize((img.width * 2, img.height * 2))
+    if w < 1600 and w * h * 4 <= MAX_PIXELS:
+        img = img.resize((w * 2, h * 2))
     return pytesseract.image_to_string(img, config="--psm 6")
 
 
@@ -114,6 +121,8 @@ def claude_positions(image_bytes: bytes, media_type: str = "image/png") -> list[
 
     from . import ai
 
+    if len(image_bytes) > MAX_BYTES:
+        raise ValueError("image too large")
     client = anthropic.Anthropic(api_key=ai.api_key())
     msg = client.messages.create(
         model=ai.MODEL, max_tokens=4000,

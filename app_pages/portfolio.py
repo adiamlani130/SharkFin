@@ -68,6 +68,10 @@ with st.expander("Import from a screenshot", icon=":material/photo_camera:"):
                     raw = img.getvalue()
                     rows = (shot.claude_positions(raw, img.type or "image/png") if use_ai
                             else shot.parse_positions(shot.ocr_text(raw)))
+                except ValueError as e:
+                    rows = []
+                    st.error("That image is too large. Crop it to just the holdings list." if "too large" in str(e)
+                             else "Couldn't read it.")
                 except Exception as e:
                     rows = []
                     st.error(f"Couldn't read it ({e.__class__.__name__}).")
