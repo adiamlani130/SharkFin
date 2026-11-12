@@ -70,6 +70,7 @@ pages = {
 nav = st.navigation(pages)
 
 with st.sidebar:
+    ui.voice_box()
     ui.account_box()
     st.caption(f"{len(st.session_state.portfolio)} positions · {len(st.session_state.watchlist)} on watchlist")
 

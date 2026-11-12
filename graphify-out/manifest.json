@@ -24,15 +24,15 @@
     "semantic_hash": ""
   },
   "app_pages/portfolio.py": {
-    "mtime": 1794463606.0125413,
-    "seen": 1794463805.6619492,
-    "ast_hash": "ccdfa26a870ebfc9e7197762e3aa33b1",
+    "mtime": 1794467726.234041,
+    "seen": 1794468094.348095,
+    "ast_hash": "311da94098430277ba36ffcffec6b805",
     "semantic_hash": ""
   },
   "app_pages/predictions.py": {
-    "mtime": 1794459490.9679682,
-    "seen": 1794459852.6328576,
-    "ast_hash": "e26a11755ef8650eec90f0c84e58f02b",
+    "mtime": 1794467624.7647722,
+    "seen": 1794468094.3480985,
+    "ast_hash": "c2ee97b47c829381ff885ebcbf5661ba",
     "semantic_hash": ""
   },
   "app_pages/research.py": {
@@ -54,9 +54,9 @@
     "semantic_hash": ""
   },
   "main.py": {
-    "mtime": 1794459648.3785865,
-    "seen": 1794459852.6328666,
-    "ast_hash": "c6ef803daf2d32046e6a245e4956c12f",
+    "mtime": 1794467616.6191173,
+    "seen": 1794468094.3481138,
+    "ast_hash": "bc7d7cff28c659d515f41e47c252995e",
     "semantic_hash": ""
   },
   "sharkfin/__init__.py": {
@@ -66,10 +66,10 @@
     "semantic_hash": "695312a9d836a041fd29c66faaa872dd"
   },
   "sharkfin/ai.py": {
-    "mtime": 1794004447.5395412,
-    "seen": 1794007207.2843163,
-    "ast_hash": "446dfcb467e195f2f68638ebeac4dbde",
-    "semantic_hash": "446dfcb467e195f2f68638ebeac4dbde"
+    "mtime": 1794467616.6177292,
+    "seen": 1794468094.3481178,
+    "ast_hash": "d91e60ab7ef5a65ce6048de7df755877",
+    "semantic_hash": ""
   },
   "sharkfin/backtest.py": {
     "mtime": 1794004447.5395412,
@@ -192,9 +192,9 @@
     "semantic_hash": ""
   },
   "sharkfin/ui.py": {
-    "mtime": 1794463606.011921,
-    "seen": 1794463805.6620018,
-    "ast_hash": "b13b18d50bba31cbd2a306474ac72040",
+    "mtime": 1794467907.2417495,
+    "seen": 1794468094.3481958,
+    "ast_hash": "653cc8b7cf2f2497bfe6e3255b17b820",
     "semantic_hash": ""
   },
   "sharkfin/valuation.py": {
@@ -246,15 +246,15 @@
     "semantic_hash": "67d88e9d0760c3ba54c75dfd9551c1c5"
   },
   "README.md": {
-    "mtime": 1794463654.456408,
-    "seen": 1794463805.6620224,
-    "ast_hash": "d975663ae2c21a925b0924d34008fe84",
+    "mtime": 1794468087.6235754,
+    "seen": 1794468094.348238,
+    "ast_hash": "a0ca26f6f3e12160a792b2b9be4ce5ff",
     "semantic_hash": ""
   },
   "requirements.txt": {
-    "mtime": 1794459648.379563,
-    "seen": 1794459852.6329856,
-    "ast_hash": "bf827e63e7b01823f901415d7644a1f4",
+    "mtime": 1794467726.2569249,
+    "seen": 1794468094.3482497,
+    "ast_hash": "973025bd5079b6a098a1ae185bb59f8b",
     "semantic_hash": ""
   },
   "sharkfin_logo.png": {
@@ -474,9 +474,9 @@
     "semantic_hash": ""
   },
   "sharkfin/alerts.py": {
-    "mtime": 1794463606.0109608,
-    "seen": 1794463805.661962,
-    "ast_hash": "b4832ab4f371464946d91c8a4c90efec",
+    "mtime": 1794463885.3937087,
+    "seen": 1794468094.3481195,
+    "ast_hash": "e2a31fa66c615400c8928ba87f1f4d0d",
     "semantic_hash": ""
   },
   "sharkfin/threat.py": {
@@ -498,9 +498,39 @@
     "semantic_hash": ""
   },
   "docs/ALERTS_SETUP.md": {
-    "mtime": 1794463654.2194903,
-    "seen": 1794463805.6620233,
-    "ast_hash": "071332fc6ecaec6083ecaa8273fe8f54",
+    "mtime": 1794463893.2376359,
+    "seen": 1794468094.34824,
+    "ast_hash": "b1e75144ad11853fd7e132d7f27e247c",
+    "semantic_hash": ""
+  },
+  "sharkfin/screenshot_import.py": {
+    "mtime": 1794467713.606051,
+    "seen": 1794468094.3481762,
+    "ast_hash": "1736ff1ad3a0e49aef7db9532639b10a",
+    "semantic_hash": ""
+  },
+  "sharkfin/voice.py": {
+    "mtime": 1794467876.1855206,
+    "seen": 1794468094.3481998,
+    "ast_hash": "37440921af8da6ba0fdfcdcbdb1fb527",
+    "semantic_hash": ""
+  },
+  "tests/test_voice_import.py": {
+    "mtime": 1794467739.7252007,
+    "seen": 1794468094.3482337,
+    "ast_hash": "a8f496be40c9cac1c6f8ae3b2e05883b",
+    "semantic_hash": ""
+  },
+  "docs/VOICE_AND_IMPORT.md": {
+    "mtime": 1794468087.5604541,
+    "seen": 1794468094.3482466,
+    "ast_hash": "1413949fe7a4d3a37be008b8f7c70188",
+    "semantic_hash": ""
+  },
+  "packages.txt": {
+    "mtime": 1794467726.234041,
+    "seen": 1794468094.3482478,
+    "ast_hash": "06825a5b07ad306bbcf90f564a78dec6",
     "semantic_hash": ""
   }
 }
