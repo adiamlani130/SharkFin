@@ -55,9 +55,13 @@ job we're building next will also ping it.
    - `http://localhost:8501/oauth2callback` (for running it on your computer)
    - later, when you move to your own domain: `https://YOUR-DOMAIN/oauth2callback`
 4. Copy the **Client ID** and **Client secret**.
-5. Back on the consent screen, go to **Audience** and click **Publish app**. While the app is in "Testing", only
-   up to 100 test users you list by hand can sign in. An app that asks only for name and email doesn't need
-   Google's review.
+5. Open **Audience** and, under **Test users**, add the Gmail addresses that should be able to sign in (up to 100).
+   The app stays in **Testing** for now. Google won't let you publish until the **Branding** page has a home page
+   and privacy policy link on a domain you've verified, which isn't possible on `streamlit.app`. Everyone not on the
+   list can still use SharkFin as a guest.
+6. Once you have your own domain: put a home page and a short privacy policy on it, verify the domain in Google
+   Search Console, add both links and the domain on **Branding**, then click **Audience → Publish app**. Apps that
+   ask only for name and email don't need Google's review.
 
 ## 3. Streamlit secrets
 
