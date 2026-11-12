@@ -24,9 +24,9 @@
     "semantic_hash": ""
   },
   "app_pages/portfolio.py": {
-    "mtime": 1794459648.379191,
-    "seen": 1794459852.632856,
-    "ast_hash": "15d0e82f2dd1d6f97ceabaed4b79c30c",
+    "mtime": 1794463606.0125413,
+    "seen": 1794463805.6619492,
+    "ast_hash": "ccdfa26a870ebfc9e7197762e3aa33b1",
     "semantic_hash": ""
   },
   "app_pages/predictions.py": {
@@ -192,9 +192,9 @@
     "semantic_hash": ""
   },
   "sharkfin/ui.py": {
-    "mtime": 1794459642.627074,
-    "seen": 1794459852.632919,
-    "ast_hash": "b06856f37bf07c18aa37d12747962ff7",
+    "mtime": 1794463606.011921,
+    "seen": 1794463805.6620018,
+    "ast_hash": "b13b18d50bba31cbd2a306474ac72040",
     "semantic_hash": ""
   },
   "sharkfin/valuation.py": {
@@ -246,9 +246,9 @@
     "semantic_hash": "67d88e9d0760c3ba54c75dfd9551c1c5"
   },
   "README.md": {
-    "mtime": 1794459850.3190527,
-    "seen": 1794459852.632978,
-    "ast_hash": "9d0fdb5a0a7cd04271da1857f9c715b2",
+    "mtime": 1794463654.456408,
+    "seen": 1794463805.6620224,
+    "ast_hash": "d975663ae2c21a925b0924d34008fe84",
     "semantic_hash": ""
   },
   "requirements.txt": {
@@ -450,21 +450,57 @@
     "semantic_hash": ""
   },
   "sharkfin/store.py": {
-    "mtime": 1794459613.8919756,
-    "seen": 1794459852.6329126,
-    "ast_hash": "0d683af0a287025e947066d3b2eba6c8",
+    "mtime": 1794463563.098454,
+    "seen": 1794463805.6619961,
+    "ast_hash": "7953d064b1ca1a5fc008b1fdc9d59d89",
     "semantic_hash": ""
   },
   "tests/test_store.py": {
-    "mtime": 1794459680.9239795,
-    "seen": 1794459852.6329715,
-    "ast_hash": "4bcbbcbe4f3af8c5bb94082cef5a9656",
+    "mtime": 1794460936.8539166,
+    "seen": 1794463805.6620188,
+    "ast_hash": "42b1457545fb14808b8e51d1fb5f883c",
     "semantic_hash": ""
   },
   "docs/SIGN_IN_SETUP.md": {
-    "mtime": 1794459840.535989,
-    "seen": 1794459852.6329834,
-    "ast_hash": "bc717f061fed59672b4fdef6436011a2",
+    "mtime": 1794462782.8699417,
+    "seen": 1794463805.6620266,
+    "ast_hash": "7667c37954499285b5fe72e3595a6ef5",
+    "semantic_hash": ""
+  },
+  ".github/workflows/daily-alerts.yml": {
+    "mtime": 1794463626.1208358,
+    "seen": 1794463805.6619384,
+    "ast_hash": "18735057c09bc4c9262767fcafc9a12f",
+    "semantic_hash": ""
+  },
+  "sharkfin/alerts.py": {
+    "mtime": 1794463606.0109608,
+    "seen": 1794463805.661962,
+    "ast_hash": "b4832ab4f371464946d91c8a4c90efec",
+    "semantic_hash": ""
+  },
+  "sharkfin/threat.py": {
+    "mtime": 1794463506.2056253,
+    "seen": 1794463805.6620007,
+    "ast_hash": "8baadba124ae727724cc368f3073134d",
+    "semantic_hash": ""
+  },
+  "tests/test_alerts.py": {
+    "mtime": 1794463635.1990945,
+    "seen": 1794463805.6620102,
+    "ast_hash": "8330607b2c78b10cebf946cda9e3047d",
+    "semantic_hash": ""
+  },
+  "tests/test_threat.py": {
+    "mtime": 1794463506.203593,
+    "seen": 1794463805.6620202,
+    "ast_hash": "5a0105551d4eb61f8101c000b1d5cbe6",
+    "semantic_hash": ""
+  },
+  "docs/ALERTS_SETUP.md": {
+    "mtime": 1794463654.2194903,
+    "seen": 1794463805.6620233,
+    "ast_hash": "071332fc6ecaec6083ecaa8273fe8f54",
     "semantic_hash": ""
   }
 }
