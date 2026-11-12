@@ -36,7 +36,8 @@ Each run also reads Supabase, which stops a free project from pausing.
    - `SUPABASE_KEY`: the same `sb_secret_...` key
    - `NTFY_TOPIC` (optional): a long random name for your own signal feed, e.g. `sharkfin-k3j9x...`
 2. Open the **Actions** tab, pick **Daily alerts**, and click **Run workflow** with "dry run" ticked. The log shows
-   what would be sent. Run it again without the dry run to send for real.
+   the day's buy signals and how many users have something to send. Because the repo is public, its Actions logs
+   are too, so users' holdings and threat details are never printed there. Run it again without the dry run to send for real.
 
 ### Each user (in the app)
 

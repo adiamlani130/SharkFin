@@ -164,6 +164,7 @@ def run(dry: bool = False) -> int:
     if store.supabase_config():
         settings = store.cloud_all("alerts")  # also keeps the free Supabase project awake
         states = store.cloud_all("alert_state") if settings else {}
+        users = pings = 0
         for uid, rows in settings.items():
             s = rows[0] if rows and isinstance(rows[0], dict) else {}
             if not valid_topic(s.get("topic", "")):
@@ -174,14 +175,18 @@ def run(dry: bool = False) -> int:
                 last = (states.get(uid) or [{}])[0].get("level") if states.get(uid) else None
                 title, body, prio, level = compose(s, portfolio, sig, last)
             except Exception as e:  # one user's bad data never stops the rest
-                print(f"[{uid[:6]}] skipped: {e}")
+                print(f"A user was skipped ({e.__class__.__name__}).")
                 continue
-            print(f"[{uid[:6]}] {title} ({prio})\n{body or '(nothing to send)'}\n")
+            if dry and not os.environ.get("GITHUB_ACTIONS"):  # Actions logs are public: never print a user's holdings
+                print(f"[user] {title} ({prio})\n{body or '(nothing to send)'}\n")
+            users += 1
+            pings += bool(body)
             if not dry:
                 if body:
                     sent += send(s["topic"], title, body, prio, "warning" if prio == "high" else "shark")
                 if level:
                     store.save("alert_state", [{"level": level}], who)
+        print(f"Per-user alerts: {users} user(s) checked, {pings} with something to send.")
     else:
         print("Supabase not configured: skipping per-user alerts.")
     print(f"Sent {sent} notification(s).")
