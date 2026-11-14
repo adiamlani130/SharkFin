@@ -63,16 +63,32 @@ def sector_ret3(ohlc: dict, period: str = "2y") -> pd.DataFrame | None:
     return leader_dip.sector_returns(c.index, c.columns, sector_map(), m["etf"]) if not c.empty else None
 
 
+def dive_zone_latest(ohlc: dict, ref: pd.Series | None = None) -> pd.DataFrame:
+    """``leader_dip.latest`` with every Dive Zone check: quality points and, for the stocks that signal, the
+    no-recent-earnings-miss check (their earnings histories come from the data layer)."""
+    m = market_inputs()
+    c = ohlc["Close"]
+    now = leader_dip.latest(c, ref, ohlc=ohlc, vix=m["vix"] if len(m["vix"]) else None, sector_ret3=sector_ret3(ohlc))
+    sig = tuple(now.index[now["Signal"].astype(bool)])
+    hist = data.earnings_histories(sig) if sig else {}
+    return leader_dip.drop_recent_misses(now, hist, asof=c.index[-1])
+
+
+def dive_zone_misses(symbols) -> pd.DataFrame:
+    """Missed reports for backtests: the research file (S&P 500 members to Nov 2026) for the given symbols."""
+    m = leader_dip.bundled_misses()
+    return m[m["sym"].isin(set(symbols))] if len(m) else m
+
+
 @data.ttl_cache(1800)
 def leader_dip_today() -> pd.DataFrame:
     """Every S&P 500 stock's Dive Zone reading at the last close (signals have Signal == True)."""
     ohlc = sp500_ohlcv()
     if "Close" not in ohlc or ohlc["Close"].shape[1] < 10:
         return pd.DataFrame()
-    m = market_inputs()
     c = ohlc["Close"]
     ref = leader_dip.six_month_gain(c.ffill()).iloc[-1].dropna()
-    return leader_dip.latest(c, ref, ohlc=ohlc, vix=m["vix"] if len(m["vix"]) else None, sector_ret3=sector_ret3(ohlc))
+    return dive_zone_latest(ohlc, ref)
 
 
 @data.ttl_cache(1800)

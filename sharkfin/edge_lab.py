@@ -229,7 +229,8 @@ def confluences(d: dict, ef: dict) -> dict:
         "News gap only: a single-day drop of 7%+ in the last 3 days": {"buy_ok": F(big_drop3 <= -0.07)},
         "Dip-day volume 1.5x normal or more (capitulation)": {"buy_ok": F(volx >= 1.5)},
         "Dip-day volume under 1.5x normal (quiet dip)": {"buy_ok": F(volx < 1.5)},
-        "Stock beating its sector ETF over 6 months": {"buy_ok": T(rs_sec > 0)},
+        # A stock with no sector label (it left the index) passes, so the filter can't quietly drop delisted names.
+        "Stock beating its sector ETF over 6 months": {"buy_ok": (rs_sec > 0) | rs_sec.isna()},
         "Credit calm: junk bonds (HYG/IEF) above their 50-day": {"entry_ok": credit_ok},
         "10-year yield not up 0.4+ points in a month": {"entry_ok": (tnx - tnx.shift(21) < 0.4) | tnx.isna()},
     }
@@ -343,6 +344,41 @@ def combos(d: dict, ev: pd.DataFrame) -> pd.DataFrame:
                          members=mem, **kw)
         rows.append({"Strategy": "Tech Breakout Rider", "Version": name, **_both(r["returns"], rf)})
     return pd.DataFrame(rows)
+
+
+def publish_dive_zone(d: dict, ev: pd.DataFrame) -> dict:
+    """Dive Zone with the one check that passed both windows (no buys within 30 sessions of a missed report), as
+    the app now trades it: writes the missed-report
+    file the app's backtests read, the strategy's daily returns into ``growth_returns.csv`` and its trade list, and
+    returns the numbers quoted on the Strategy Playbook page."""
+    from . import growth_lab as gl
+    root = Path(__file__).with_name("research_data")
+    miss = ev[ev["surprise"] <= 0][["sym", "date"]].rename(columns={"date": "day"}).sort_values(["sym", "day"])
+    miss.to_csv(root / "earnings_misses.csv", index=False, date_format="%Y-%m-%d")
+    rf = pd.Series(gl.swing_engine.daily_cash(d["dates"], d["tbill"]), index=d["dates"])
+    kw = dict(misses=miss)
+    res = gl.dive_zone(d, **kw)
+    r = res["returns"]
+    out = pd.read_csv(root / "growth_returns.csv", index_col=0, parse_dates=True)
+    out["dive_zone"] = r.reindex(out.index).to_numpy()
+    out.to_csv(root / "growth_returns.csv", float_format="%.7g")
+    res["trades"].to_csv(root / "growth_lab" / "dive_zone_trades.csv", index=False)
+    tr = res["trades"][res["trades"]["Why it sold"] != "Open"]
+    g = tr[pd.to_datetime(tr["Signal date"]).between(*GRADE)]
+    w, l = g[g["Return"] > 0]["Return"], g[g["Return"] <= 0]["Return"]
+    st = ld.backtest(d["panel"], d["spy"], "spy_trend", d["tbill"], ld.SLOTS, COST_BPS + 25, start=PICK[0], rules="plus",
+                     vix=d["vix"], sector_ret3=d["sector_ret3"], members=d["members"], **kw)["returns"]
+    br = out["tech_breakout_rider"]
+    both = 0.7 * out["dive_zone"] + 0.3 * br
+    facts = {"grade": _stats(r, rf, *GRADE), "pick": _stats(r, rf, *PICK), "win": (g["Return"] > 0).mean(),
+             "edge": g["Return"].mean(), "avg_win": w.mean(), "avg_loss": l.mean(), "payoff": w.mean() / -l.mean(),
+             "pf": w.sum() / -l.sum(), "trades_yr": len(g) / (len(r.loc[GRADE[0]:GRADE[1]]) / 252),
+             "hold": g["Days held"].mean(), "older": _stats(r, rf, "2006-01-03", "2012-12-31"),
+             "stress": _stats(st, rf, *GRADE), "before_crash": _stats(r, rf, GRADE[0], "2026-10-12"),
+             "both": _stats(both, rf, *GRADE), **{k: (1 + r.loc[a:z].iloc[1:]).prod() - 1 for k, (a, z) in SELLOFFS.items()},
+             "y2008": (1 + r.loc["2008-01-01":"2008-12-31"]).prod() - 1,
+             "both_2022": (1 + both.loc["2022-01-03":"2022-12-30"].iloc[1:]).prod() - 1}
+    return facts
 
 
 # ------------------------------------------------------------------------------------------------- 2. themes
@@ -813,6 +849,7 @@ def main(folder: str) -> None:
     port.to_csv(OUT / "confluences.csv", index=False)
     buckets.to_csv(OUT / "confluence_trades.csv", index=False)
     combos(d, ev).to_csv(OUT / "confluence_combos.csv", index=False)
+    print(publish_dive_zone(d, ev), flush=True)
     print("confluences done", flush=True)
 
 

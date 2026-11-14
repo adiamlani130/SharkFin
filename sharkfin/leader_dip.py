@@ -9,6 +9,8 @@ profits into the bounce, and keep the rest of the money working in SPY.
     * off the high: the close is more than 10% under its 52-week high
     * a sector-wide dip: the stock's sector ETF fell 2%+ over 3 days
     * fear: VIX closed above 20
+  One more check, added in Nov 2026 (``edge_lab.py``): the stock must not have missed (or only matched) earnings
+  estimates in the last 30 trading days. A dip right after a miss is a re-rating, not a flush.
   New trades are only placed while SPY closes above its 200-day average, or during a panic (VIX above 25).
   Entry, the next day: a limit order 3% under the signal close. It fills only if the day's low reaches the
   limit, at the open when the stock opens below it.
@@ -19,10 +21,11 @@ profits into the bounce, and keep the rest of the money working in SPY.
   above its 200-day the day before, and in T-bills otherwise.
 
 SharkFin's Nov 2026 re-run (``growth_lab.py``: point-in-time S&P 500 members, 0.1% cost per side), settings
-picked on 2006 - Oct 2021 and graded on Oct 2021 - Nov 6 2026: 27.6% a year, Sharpe 1.13 (after T-bills), worst
-drop 22.5%, 64% of trades won, +1.5% a trade. SPY made 12.5% a year with a 24.5% worst drop. Up to Oct 12 2026 it
-stood at 34.1% a year; the Oct-Nov 2026 chip and software selloff cost it 20% while SPY lost 5.5%, because it kept
-buying falling leaders. None of the VIX, GEX or breadth filters tested would have helped on the picking window.
+picked on 2006 - Oct 2021 and graded on Oct 2021 - Nov 6 2026: 28.9% a year, Sharpe 1.18 (after T-bills), worst
+drop 22.7%, 64% of trades won, +1.6% a trade. SPY made 12.5% a year with a 24.5%
+worst drop. The Oct-Nov 2026 chip and software selloff cost it about 20% while SPY lost 5.5%, because it kept
+buying falling leaders. None of the VIX, GEX or breadth filters tested would have helped on the picking window;
+the no-recent-miss check helped on both windows (before it: 27.6% a year, Sharpe 1.13).
 
 The original rules ("classic": no quality points, no target or 200-day exit, SPY-only switch, 10 slots, cash in
 T-bills) stay in the code for tests and comparisons only. Everything is computed from data up to the signal close,
@@ -57,6 +60,9 @@ OFF_HIGH = 0.10
 SECTOR_DROP = -0.02
 FEAR_VIX = 20.0
 
+# Confluences (edge_lab, Nov 2026)
+MISS_DAYS = 30          # no buys this many trading days after a report that missed or only matched estimates
+
 CLASSIC_SLOTS = 10
 RULESETS = {"Dive Zone": "plus"}  # the original "classic" rules stay in the code for tests and comparisons only
 
@@ -69,6 +75,8 @@ ENTRY_RULE = (f"Limit buy at {LIMIT:.0%} of the signal close for the next day on
               "the limit; if the stock opens below it, you get the open.")
 QUALITY_RULE = ("Needs at least one quality point: a deep dip (2.5+ ATRs under the 10-day high), more than 10% under "
                 "the 52-week high, the sector ETF down 2%+ in 3 days, or VIX above 20.")
+
+CONFLUENCE_RULE = (f"It must not have missed (or only matched) earnings estimates in the last {MISS_DAYS} trading days.")
 
 CASH_CHOICES = {
     "SPY while SPY is above its 200-day": "spy_trend",
@@ -150,6 +158,58 @@ def _members(members: pd.DataFrame | None, like: pd.DataFrame) -> pd.DataFrame |
     return members.reindex(index=like.index, columns=like.columns).fillna(False).astype(bool)
 
 
+def report_days(ed: pd.DataFrame | None) -> pd.DataFrame:
+    """From a Yahoo earnings-dates table: one row per past report with the session the market reacted on (``day``; a
+    report after 4pm reacts the next session, so ``after`` is True) and whether it missed or only matched estimates."""
+    cols = ["day", "after", "miss"]
+    if ed is None or not isinstance(ed, pd.DataFrame) or ed.empty or "Reported EPS" not in ed:
+        return pd.DataFrame(columns=cols)
+    ed = ed.copy()
+    ed.index = pd.to_datetime(ed.index)
+    if ed.index.tz is not None:
+        ed.index = ed.index.tz_convert("America/New_York").tz_localize(None)
+    eps = pd.to_numeric(ed["Reported EPS"], errors="coerce")
+    est = pd.to_numeric(ed["EPS Estimate"], errors="coerce") if "EPS Estimate" in ed else pd.Series(np.nan, index=ed.index)
+    sur = pd.to_numeric(ed["Surprise(%)"], errors="coerce") if "Surprise(%)" in ed else pd.Series(np.nan, index=ed.index)
+    sur = sur.where(sur.notna(), np.sign(eps - est))
+    ok = eps.notna() & sur.notna()
+    out = pd.DataFrame({"day": ed.index.normalize(), "after": ed.index.hour >= 16, "miss": (sur <= 0).to_numpy()})[ok.to_numpy()]
+    return out.sort_values("day").drop_duplicates("day", keep="last").reset_index(drop=True)
+
+
+def recent_miss(index: pd.Index, columns: pd.Index, misses: pd.DataFrame | None, days: int = MISS_DAYS) -> pd.DataFrame:
+    """True from the session a missed report was reacted to until ``days`` sessions later (dates x tickers).
+    ``misses`` has ``sym`` and ``day`` (and optionally ``after``: the reaction is the session after ``day``)."""
+    out = np.zeros((len(index), len(columns)), dtype=bool)
+    if misses is not None and len(misses):
+        idx = pd.DatetimeIndex(index).normalize()
+        col = {c: j for j, c in enumerate(columns)}
+        after = misses["after"].to_numpy(bool) if "after" in misses else np.zeros(len(misses), dtype=bool)
+        day = pd.DatetimeIndex(pd.to_datetime(misses["day"]))
+        first = np.where(after, idx.searchsorted(day, side="right"), idx.searchsorted(day, side="left"))
+        for s, i in zip(misses["sym"], first):
+            j = col.get(s)
+            if j is not None and i < len(idx):
+                out[i:i + days + 1, j] = True
+    return pd.DataFrame(out, index=index, columns=columns)
+
+
+def bundled_misses() -> pd.DataFrame:
+    """The research file of missed reports (S&P 500 members, 2005 - Nov 2026; ``day`` is the reaction session)."""
+    from pathlib import Path
+    try:
+        return pd.read_csv(Path(__file__).with_name("research_data") / "earnings_misses.csv", parse_dates=["day"])
+    except (OSError, ValueError):
+        return pd.DataFrame(columns=["sym", "day"])
+
+
+def misses_from_histories(histories: dict) -> pd.DataFrame:
+    """{ticker: Yahoo earnings-dates table} -> the ``misses`` frame ``recent_miss`` takes."""
+    rows = [report_days(ed).query("miss").assign(sym=s)[["sym", "day", "after"]] for s, ed in histories.items()]
+    rows = [r for r in rows if len(r)]
+    return pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=["sym", "day", "after"])
+
+
 def signal_frames(close: pd.DataFrame, buy_below: float = BUY_BELOW, members: pd.DataFrame | None = None) -> dict:
     """Classic Dive Zone inputs and signals for a panel of closes (dates x tickers).
 
@@ -202,6 +262,8 @@ def latest(close: pd.DataFrame, reference_gains: pd.Series | None = None, ohlc: 
            vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None) -> pd.DataFrame:
     """Every stock's Dive Zone reading at the last close.
 
+    The earnings check needs each signal's earnings history, so the caller applies it (``drop_recent_misses``).
+
     ``reference_gains`` (the S&P 500's 6-month gains) sets the strength rank; without it the stocks are ranked
     against each other. With ``ohlc`` (highs and lows) the Plus rules apply: quality points, the profit target
     and the 200-day exit. Without it the classic signal is returned."""
@@ -234,11 +296,40 @@ def latest(close: pd.DataFrame, reference_gains: pd.Series | None = None, ohlc: 
     return out.dropna(subset=["Price"])
 
 
+def drop_recent_misses(now: pd.DataFrame, histories: dict, asof=None) -> pd.DataFrame:
+    """Apply the earnings check to ``latest``'s signals: a signal whose last report (in ``histories``, {ticker:
+    Yahoo earnings-dates table}) missed or only matched estimates within ``MISS_DAYS`` sessions is switched off
+    and flagged in "Recent miss". Stocks without an earnings history keep their signal."""
+    out = now.copy()
+    out["Recent miss"] = False
+    asof = pd.Timestamp(asof if asof is not None else pd.Timestamp.now()).normalize()
+    for s in out.index[out["Signal"].astype(bool)]:
+        if missed_recently(histories.get(s), asof):
+            out.at[s, "Recent miss"] = True
+            out.at[s, "Signal"] = False
+    return out
+
+
+def missed_recently(ed: pd.DataFrame | None, asof, days: int = MISS_DAYS) -> bool:
+    """Did the last report before ``asof`` miss or only match estimates, within ``days`` sessions (weekdays)?"""
+    r = report_days(ed)
+    if r.empty:
+        return False
+    asof = pd.Timestamp(asof).normalize()
+    react = r["day"] + pd.to_timedelta(np.where(r["after"], 1, 0), unit="D")
+    r = r[react <= asof]
+    if r.empty or not bool(r["miss"].iloc[-1]):
+        return False
+    start = (r["day"].iloc[-1] + pd.Timedelta(days=1 if r["after"].iloc[-1] else 0)).date()
+    return int(np.busday_count(start, asof.date())) <= days
+
+
 def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
                  market_close: pd.Series | None = None, vix: pd.Series | None = None,
-                 sector_close: pd.Series | None = None) -> dict:
+                 sector_close: pd.Series | None = None, recent_miss: bool | None = None) -> dict:
     """One stock's Dive Zone status at the last close, with a checklist. ``sector_close`` is the
-    stock's sector ETF (for the sector-dip quality point)."""
+    stock's sector ETF (for the sector-dip quality point); ``recent_miss`` says
+    whether its last earnings report missed within ``MISS_DAYS`` sessions (None = unknown, which passes)."""
     c = ohlcv["Close"].astype(float).dropna()
     h = ohlcv["High"].astype(float).reindex(c.index)
     lo = ohlcv["Low"].astype(float).reindex(c.index)
@@ -252,6 +343,7 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
     if sector_close is not None and len(sector_close.dropna()) > 5:
         s_ = _align(sector_close, c.index)
         sr3 = pd.DataFrame({"x": s_ / s_.shift(3) - 1})
+    no_miss = None if recent_miss is None else not recent_miss
     panel = {"Open": c.to_frame("x"), "High": h.to_frame("x"), "Low": lo.to_frame("x"), "Close": c.to_frame("x")}
     q = quality_points(panel, vix, sr3)
     atr = float(q["atr"]["x"].iloc[-1]) if len(c) else np.nan
@@ -268,7 +360,8 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
     up = bool(np.isfinite(s200) and price > s200)
     leader = bool(np.isfinite(rank) and rank > STRENGTH_MIN)
     dip = bool(np.isfinite(r2) and r2 < BUY_BELOW)
-    signal = up and leader and dip and n_q >= 1
+    base_signal = up and leader and dip and n_q >= 1
+    signal = base_signal and no_miss is not False
     limit = price * LIMIT
     target = price + TARGET_ATR * atr if np.isfinite(atr) else np.nan
     sec_txt = (f"sector ETF {float(sr3['x'].iloc[-1]):+.1%} in 3 days" if sr3 is not None and np.isfinite(sr3["x"].iloc[-1])
@@ -295,11 +388,20 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
         {"Rule": "At least one quality point", "Pass": n_q >= 1 if len(c) else None, "Detail": q_detail,
          "Why it matters": "A deep flush, a stock well off its high, a sector-wide selloff or a fearful market made "
                            "for better bounces in 2000-12, and the rule held up after 2013."},
+        {"Rule": f"No earnings miss in the last {MISS_DAYS} trading days", "Pass": no_miss,
+         "Detail": "missed or only matched estimates recently" if recent_miss else
+                   "no recent miss" if recent_miss is False else "earnings history n/a (passes)",
+         "Why it matters": "A dip right after a missed quarter is the market re-pricing the business, not a flush: "
+                           "since 2021 those trades lost money on average."},
     ]
     if signal and m_ok is not False:
         label, tone = "Buy signal", "pos"
         note = (f"Place a limit buy at ${limit:,.2f} for the next session only. If it fills, set a sell limit at "
                 f"${target:,.2f} (+{TARGET_ATR:g} ATR). {EXIT_RULE}")
+    elif base_signal and no_miss is False:
+        label, tone = "Dip after an earnings miss", "neu"
+        note = (f"Every price rule passed, but the last earnings report missed estimates within {MISS_DAYS} trading "
+                "days, so Dive Zone skips it.")
     elif signal:
         label, tone = "Signal, market switch off", "neu"
         note = "The stock qualifies, but SPY is below its 200-day average and VIX is calm, so the system takes no new trades."
@@ -387,7 +489,8 @@ def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbil
              slots: int = SLOTS, cost_bps: float = COST_BPS, start=None, rules: str = "plus",
              vix: pd.Series | None = None, sector_ret3: pd.DataFrame | None = None, buy_below: float = BUY_BELOW,
              target_atr: float = TARGET_ATR, members: pd.DataFrame | None = None, liquidate: bool = False,
-             entry_ok: pd.Series | None = None, buy_ok: pd.DataFrame | None = None) -> dict:
+             entry_ok: pd.Series | None = None, buy_ok: pd.DataFrame | None = None,
+             misses: pd.DataFrame | None = None) -> dict:
     """Run Dive Zone on a panel {"Open"|"High"|"Low"|"Close": dates x tickers}.
 
     ``rules`` is "plus" (quality points, profit target, 200-day exit, panic-aware switch) or "classic".
@@ -396,7 +499,8 @@ def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbil
     or "spy". ``cost_bps`` is charged on each buy and each sell. ``members`` limits trading and ranking to
     point-in-time index members. ``entry_ok`` (a True/False series by date, known at that date's close) is an
     extra filter on new trades, used to test confluences such as a VIX or GEX condition; ``buy_ok`` (dates x
-    tickers) does the same stock by stock. One fixed set of settings
+    tickers) does the same stock by stock. ``misses`` (missed earnings reports, see
+    ``recent_miss``) switches on the no-recent-miss check. One fixed set of settings
     over the whole span is an in-sample test: use ``walk_forward`` for out-of-sample results."""
     C = ohlcv["Close"].astype(float).sort_index().dropna(axis=1, how="all")
     dates = C.index
@@ -418,6 +522,8 @@ def backtest(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbil
         raise ValueError("Not enough price history for a Dive Zone backtest (needs about a year).")
     if plus:
         sig = plus_frames(panel, vix, sector_ret3, buy_below, target_atr, members)
+        if misses is not None:
+            sig["buy"] = sig["buy"] & ~recent_miss(dates, C.columns, misses)
         if buy_ok is not None:
             sig["buy"] = sig["buy"] & buy_ok.reindex(index=dates, columns=C.columns).fillna(False).astype(bool)
         labels = pd.DataFrame(np.where(sig["sell"].to_numpy(), "RSI(2) above 70",
@@ -451,7 +557,7 @@ TARGET_GRID = (1.0, 1.5, 2.0)
 def walk_forward(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", tbill_yields: pd.Series | None = None,
                  slots: int = SLOTS, cost_bps: float = COST_BPS, rules: str = "plus", vix: pd.Series | None = None,
                  sector_ret3: pd.DataFrame | None = None, members: pd.DataFrame | None = None,
-                 progress=None) -> dict:
+                 progress=None, misses: pd.DataFrame | None = None) -> dict:
     """Dive Zone graded out of sample: each year's RSI(2) level (and, for Plus, profit target) is picked on the
     three years before it (see ``walkforward``), then traded on that year only. The purge gap is the
     10-day holding limit."""
@@ -464,7 +570,8 @@ def walk_forward(ohlcv: dict, market_close: pd.Series, cash: str = "spy_trend", 
     def evaluate(d, p, start):
         res = backtest(d["ohlcv"], d["market"], cash, d["tbill"], slots, cost_bps, start=start, rules=rules,
                        vix=d["vix"], sector_ret3=d["sector"], buy_below=p["RSI(2) below"],
-                       target_atr=p.get("Target ATR", TARGET_ATR), members=d["members"], liquidate=True)
+                       target_atr=p.get("Target ATR", TARGET_ATR), members=d["members"], liquidate=True,
+                       misses=misses if plus else None)
         return {"returns": res["returns"], "trades": res["trades"], "exposure": res["exposure"]}
 
     dates = ohlcv["Close"].sort_index().index

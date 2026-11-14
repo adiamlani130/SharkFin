@@ -226,16 +226,15 @@ def leader_dip_tab():
         "<div class='sf-note'><b>Dive Zone</b> buys a sharp two-day drop in one of the market's strongest "
         "stocks and sells into the bounce. A stock signals when its <b>2-day RSI is below 10</b>, it is <b>above its "
         "200-day average</b>, its <b>6-month gain beats 70% of the S&amp;P 500</b>, and it has at least one "
-        f"<b>quality point</b>. {ui.h(leader_dip.QUALITY_RULE)} {ui.h(leader_dip.ENTRY_RULE)} "
+        f"<b>quality point</b>. {ui.h(leader_dip.QUALITY_RULE)} {ui.h(leader_dip.CONFLUENCE_RULE)} "
+        f"{ui.h(leader_dip.ENTRY_RULE)} "
         f"{ui.h(leader_dip.EXIT_RULE)} Strategy Playbook explains why it works.</div>", unsafe_allow_html=True)
     sw = live.switches().get("leader_dip", {})
     switch = sw.get("on")
     ref = sp500_gains()
     ohlc = universe_ohlcv(tuple(px.columns))
-    m = live.market_inputs()
     if "Close" in ohlc and not ohlc["Close"].empty:
-        now = leader_dip.latest(ohlc["Close"], ref if len(ref) else None, ohlc=ohlc,
-                                vix=m["vix"] if len(m["vix"]) else None, sector_ret3=live.sector_ret3(ohlc))
+        now = live.dive_zone_latest(ohlc, ref if len(ref) else None)
     else:
         now = leader_dip.latest(px, ref if len(ref) else None)
     asof = px.index[-1]
@@ -272,6 +271,9 @@ def leader_dip_tab():
         if len(skipped):
             st.caption(f"Skipped for having no quality point (an ordinary wobble, not a real flush): "
                        f"{', '.join(skipped.index[:12])}.")
+    if "Recent miss" in now and now["Recent miss"].any():
+        st.caption(f"Skipped for missing earnings estimates in the last {leader_dip.MISS_DAYS} trading days: "
+                   f"{', '.join(now.index[now['Recent miss'].astype(bool)][:12])}.")
     near = now[now["Uptrend"] & now["Leader"] & ~now["Signal"] & (now["RSI2"] < 30)].sort_values("RSI2")
     if len(near):
         with st.expander(f"Dips forming ({len(near)}): leaders in an uptrend with a 2-day RSI under 30"):

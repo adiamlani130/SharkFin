@@ -173,7 +173,9 @@ mi = live.market_inputs()
 sec_etf = live.sector_map().get(sym) or leader_dip.GICS_ETF.get(str(inf.get("sector", "")))
 ld = leader_dip.stock_status(hist, ref_gains, mkt["Close"] if not mkt.empty else None,
                              vix=mi["vix"] if len(mi["vix"]) else None,
-                             sector_close=mi["etf"][sec_etf] if sec_etf and sec_etf in mi["etf"] else None)
+                             sector_close=mi["etf"][sec_etf] if sec_etf and sec_etf in mi["etf"] else None,
+                             recent_miss=(leader_dip.missed_recently(ad.get("earnings_dates"), hist.index[-1])
+                                          if isinstance(ad.get("earnings_dates"), pd.DataFrame) else None))
 zones = levels.sr_zones(hist)
 resistance, support = levels.nearest_levels(hist, zones)
 weekly = levels.weekly_trend(hist["Close"])

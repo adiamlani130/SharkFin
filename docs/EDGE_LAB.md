@@ -10,7 +10,9 @@ Code: `sharkfin/edge_lab.py` (tests in `tests/test_edge_lab.py`), tables in `sha
 
 ## The short version
 
-1. **Strategies.** Two small filters improve Dive Zone in both windows: skip dips in the 30 days after an earnings **miss**, and only buy stocks that are **beating their own sector** over 6 months. Together they take Dive Zone from 27.6% to 29.2% a year in the grading window (Sharpe 1.13 to 1.23) and cut the worst drop in the picking window from 18% to 15%. They do **not** fix the Oct-Nov 2026 selloff (still about -21%). Nothing I tried reliably improved Tech Breakout Rider, and nothing improved the stock ranking.
+1. **Strategies.** One small filter improves Dive Zone in both windows: skip dips in the 30 trading days after an earnings **miss**. It takes Dive Zone from 27.6% to 28.9% a year in the grading window (Sharpe 1.13 to 1.18) and from 20.5% to 21.0% in the picking window (Sharpe 1.20 to 1.23). It does **not** fix the Oct-Nov 2026 selloff (still about -20%). **This filter is now in the app.** Nothing I tried reliably improved Tech Breakout Rider, and nothing improved the stock ranking.
+
+> **Correction (later on Nov 14).** The first version of this write-up also recommended a second filter, "only buy stocks beating their own sector". While building it into the app I found its test had quietly dropped every stock that is no longer in the S&P 500 (they have no sector label today), which flattered it. Tested properly it is neutral (Sharpe 1.20 to 1.22 in the picking window, 1.13 to 1.11 in the grading window), so it was **not** added. The numbers below are the corrected ones.
 2. **Speculation themes.** The Radar's "Turning up" reading catches almost every big theme run early, but it also fires all the time, so as a buy signal it is no better than picking a theme at random. One rule did better in both windows: **a theme ETF making a new 52-week high after falling 30%+ within the past year**. It roughly doubled the odds of a 40%+ run. A real breakthrough is big: the median theme run since 2010 was +164% over about 18 months, and there was still +144% left after the first "Turning up" and +54% after the first "Running". The catch is that runs end with a median 42% fall, and as a portfolio no theme rule beat simply holding SPY.
 3. **Your earnings idea.** As written (a beat when analysts expected a weaker quarter, in a growth sector 10%+ off its high) it worked well from 2006 to 2021 but **failed out of sample**: from late 2021 it lagged SPY by 4.4% over 6 months on average. "Analysts expected bad" turned out to be the weak part. A close cousin held up in both windows: use the **stock's own 15%+ fall in the 3 months before the report** as the sign of low expectations, then require a beat, a growth sector that has sold off, and a stock that rises on the day. That beat SPY by 6-7% over 6 months and 15-16% over 12 months in both windows, but the median trade was only about even, so a few big winners do the work, and it was one of about 20 setups tried.
 
@@ -25,10 +27,10 @@ Earlier rounds already showed that VIX, GEX, VIX term structure, market breadth,
 | Filter | Pick: yearly / Sharpe / worst drop | Grade: yearly / Sharpe / worst drop | Nov 2026 selloff |
 |---|---|---|---|
 | As is | 20.5% / 1.20 / -18.0% | 27.6% / 1.13 / -22.5% | -20.5% |
-| **Skip dips within 30 days of a miss** | 21.0% / 1.23 / -17.6% | 28.9% / 1.18 / -22.7% | -20.5% |
-| **Only stocks beating their sector over 6m** | 20.6% / 1.26 / -15.8% | 28.0% / 1.17 / -23.6% | -20.8% |
-| **Both together** | 20.8% / **1.28** / **-14.9%** | **29.2%** / **1.23** / -23.6% | -20.8% |
-| Both + credit switch (junk bonds above their 50-day) | 14.0% / 0.98 / -22.0% | 23.7% / 1.15 / **-14.4%** | **-12.2%** |
+| **Skip dips within 30 days of a miss (now in the app)** | **21.0% / 1.23 / -17.6%** | **28.9% / 1.18 / -22.7%** | -20.5% |
+| Only stocks beating their sector over 6m | 20.8% / 1.22 / -18.0% | 27.3% / 1.11 / -23.6% | -20.8% |
+| Both together | 21.2% / 1.25 / -17.6% | 29.3% / 1.21 / -23.6% | -20.8% |
+| Both + credit switch (junk bonds above their 50-day) | 14.6% / 0.99 / -23.1% | 25.2% / 1.21 / **-14.4%** | **-12.2%** |
 | No earnings in the next 5 days | 20.0% / 1.17 | 24.0% / 1.00 | -16.5% |
 | Credit switch alone | 14.2% / 0.97 | 25.0% / 1.21 / -13.4% | -12.2% |
 | Skip dips after a 7%+ one-day drop ("news gap") | 18.4% / 1.12 | 19.8% / 0.89 | -14.6% |
@@ -36,7 +38,7 @@ Earlier rounds already showed that VIX, GEX, VIX term structure, market breadth,
 What this means in plain terms:
 
 - **A dip right after a missed quarter is a real problem, not a dip.** In the grading window those trades lost 0.8% on average and won only 49% of the time, against +1.6% and 65% for the rest. Skipping them helped in both windows.
-- **Buy the sector's leaders, not its laggards.** Dips in stocks that were already lagging their sector won 52-58% of the time vs 65-68% for sector leaders. (This one uses today's sector labels for older stocks, so it has a little hindsight.)
+- **"Sector leaders only" does not hold up.** Alone it is neutral to slightly worse, and only a few percent of trades are in sector laggards anyway. Stacked on the miss filter it adds a sliver in both windows, which is too small to trust.
 - **The credit switch is the only thing that softened the Nov 2026 selloff** (-12% instead of -21%) and the 2022 bear market, but it cost about 6 points a year from 2006-2021 by sitting out good rebounds. Same story as the earlier crash guards: it fails the picking-window test, so I would not turn it on by default. It could be an optional "cautious mode".
 - **Surprises.** Avoiding dips just before earnings looks smart trade by trade (those trades win 52% vs 68%), but removing them made the portfolio slightly worse, because the freed slots went to weaker trades. And dips caused by a sharp one-day news drop were actually the *best* trades (+3-4% each), so filtering them out hurt.
 
@@ -128,7 +130,7 @@ What I take from it:
 
 ## Ways this could go into the app (your call)
 
-1. Dive Zone: add the two filters (skip dips within 30 days of a miss, sector leaders only). Small, steady gain, both windows. Optionally a "cautious mode" switch using the credit signal.
+1. Dive Zone: **done.** The app now skips dips within 30 trading days of an earnings miss, in the live scan, the Research page checklist and the in-app backtests. Optional later: a "cautious mode" switch using the credit signal.
 2. Speculation Radar: add a "Breakthrough" flag when a theme basket makes a new 52-week high after a 30%+ fall, show the typical run size (+164% median, 18 months) and the typical fall after the peak (-42%), and use Cooling/Broken as exit warnings.
 3. Earnings: an "Earnings recovery" watchlist using the version that held up (stock down 15%+ into the report, beat, growth sector down 10%+, up on the day), clearly labelled as an experiment with a live scoreboard.
 4. Leave Breakout Rider and the ranking as they are.

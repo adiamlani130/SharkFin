@@ -70,3 +70,59 @@ def test_breakout_buy_ok_only_removes_trades():
     assert len(blocked["trades"]) == 0
     allow = brk.backtest(px, q, start=c.index[200], buy_ok=~none)
     pd.testing.assert_series_equal(allow["equity"], base["equity"])
+
+
+# ---- Dive Zone's no-recent-earnings-miss check (leader_dip) ----
+
+from sharkfin import leader_dip as ld
+
+
+def _earnings(rows):
+    idx = pd.DatetimeIndex([r[0] for r in rows]).tz_localize("America/New_York")
+    return pd.DataFrame({"EPS Estimate": [r[1] for r in rows], "Reported EPS": [r[2] for r in rows],
+                         "Surprise(%)": [r[3] for r in rows]}, index=idx)
+
+
+def test_report_days_reads_misses_and_after_close_reports():
+    ed = _earnings([("2026-02-03 16:05", 1.0, 0.9, -10.0), ("2026-05-05 07:00", 1.0, 1.2, 20.0),
+                    ("2026-08-04 16:05", 1.1, np.nan, np.nan)])   # the last one hasn't been reported yet
+    r = ld.report_days(ed)
+    assert list(r["miss"]) == [True, False] and list(r["after"]) == [True, False]
+
+
+def test_recent_miss_starts_on_the_reaction_day_and_lasts_30_sessions():
+    idx = pd.bdate_range("2026-01-01", periods=80)
+    misses = pd.DataFrame({"sym": ["A", "B"], "day": [idx[10], idx[10]], "after": [False, True]})
+    f = ld.recent_miss(idx, pd.Index(["A", "B", "C"]), misses)
+    assert not f["A"].iloc[9] and f["A"].iloc[10] and f["A"].iloc[40] and not f["A"].iloc[41]
+    assert not f["B"].iloc[10] and f["B"].iloc[11] and f["B"].iloc[41] and not f["B"].iloc[42]   # reacts a day later
+    assert not f["C"].any()
+
+
+def test_missed_recently_uses_the_last_report_only():
+    ed = _earnings([("2026-02-03 16:05", 1.0, 0.9, -10.0), ("2026-05-05 07:00", 1.0, 1.2, 20.0)])
+    assert ld.missed_recently(ed, "2026-02-20")
+    assert not ld.missed_recently(ed, "2026-02-03")        # reported after the close: not known that day
+    assert not ld.missed_recently(ed, "2026-04-20")        # more than 30 sessions later
+    assert not ld.missed_recently(ed, "2026-05-10")        # the latest report was a beat
+    assert not ld.missed_recently(None, "2026-05-10") and not ld.missed_recently(pd.DataFrame(), "2026-05-10")
+
+
+def test_drop_recent_misses_switches_off_only_those_signals():
+    now = pd.DataFrame({"Signal": [True, True, False]}, index=["A", "B", "C"])
+    hist = {"A": _earnings([("2026-02-03 07:00", 1.0, 0.9, -10.0)]), "C": _earnings([("2026-02-03 07:00", 1.0, 0.9, -10.0)])}
+    out = ld.drop_recent_misses(now, hist, asof="2026-02-10")
+    assert list(out["Signal"]) == [False, True, False] and list(out["Recent miss"]) == [True, False, False]
+
+
+def test_backtest_misses_only_remove_buys():
+    c = closes(k=25, seed=5)
+    px = {"Open": c.shift(1).fillna(c), "High": c * 1.01, "Low": c * 0.97, "Close": c}
+    mkt = c.mean(axis=1)
+    base = ld.backtest(px, mkt, start=c.index[260])
+    none = ld.backtest(px, mkt, start=c.index[260], misses=pd.DataFrame(columns=["sym", "day"]))
+    pd.testing.assert_series_equal(base["equity"], none["equity"])
+    every = pd.DataFrame({"sym": np.repeat(c.columns, len(c.index[::20])), "day": np.tile(c.index[::20], c.shape[1])})
+    blocked = ld.backtest(px, mkt, start=c.index[260], misses=every)
+    assert len(blocked["trades"]) == 0
+    assert len(ld.bundled_misses()) > 1000

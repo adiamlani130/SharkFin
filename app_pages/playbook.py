@@ -205,7 +205,8 @@ def ld_backtest(years: str, cash: str, slots: int, cost_bps: float) -> dict:
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
     return leader_dip.walk_forward(ohlcv, m["spy"], cash=cash, tbill_yields=data.tbill_yields(period), slots=slots,
                                    cost_bps=cost_bps, rules="plus", vix=m["vix"] if len(m["vix"]) else None,
-                                   sector_ret3=sr, members=members)
+                                   sector_ret3=sr, members=members,
+                                   misses=live.dive_zone_misses(ohlcv["Close"].columns))
 
 
 def dive_zone_view():
@@ -218,6 +219,8 @@ def dive_zone_view():
             "<b>The dive.</b> The 2-day RSI closes under 10 (two sharp down days), with at least one sign it's a real "
             "flush: 2.5+ ATRs under the 10-day high, 10%+ under the 52-week high, the sector ETF down 2%+ in 3 days, "
             "or VIX above 20.",
+            "<b>No fresh earnings miss.</b> Skip a stock that missed (or only matched) earnings estimates in the last "
+            "30 trading days: that kind of dip is a re-rating, not a flush.",
             "<b>Buy cheaper.</b> A limit order 3% under the signal close, next day only.",
             "<b>Sell into the bounce.</b> At the signal close + 1.5 ATR, or at the next open once the 2-day RSI tops "
             "70, the stock closes under its 200-day, or 10 days pass. No stop loss.",
@@ -300,6 +303,9 @@ def ld_signals(now: pd.DataFrame):
                          "Strength": st.column_config.ProgressColumn("Strength rank", min_value=0, max_value=1, format="percent")})
         st.caption(f"{len(sig)} signal{'s' if len(sig) != 1 else ''} at the last close, strongest first. With more "
                    f"signals than free slots ({leader_dip.SLOTS}), take them from the top.")
+    if "Recent miss" in now and now["Recent miss"].any():
+        st.caption(f"Skipped for missing earnings estimates in the last {leader_dip.MISS_DAYS} trading days: "
+                   f"{', '.join(now.index[now['Recent miss'].astype(bool)][:12])}.")
 
 
 # ---- Tech Breakout Rider ----------------------------------------------------
