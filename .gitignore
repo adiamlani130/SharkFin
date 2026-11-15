@@ -231,3 +231,4 @@ watchlist.json
 .env
 .claude/settings.local.json
 .lab/
+.lab2/

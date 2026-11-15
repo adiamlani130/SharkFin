@@ -407,7 +407,8 @@ def leader_dip_run(universe: str, years: str, cash: str, slots: int, cost_bps: f
     sr = leader_dip.sector_returns(ohlcv["Close"].index, ohlcv["Close"].columns, live.sector_map(), m["etf"])
     return leader_dip.walk_forward(ohlcv, mkt["Close"], cash=cash, tbill_yields=data.tbill_yields(period), slots=slots,
                                    cost_bps=cost_bps, rules=rules, vix=m["vix"] if len(m["vix"]) else None,
-                                   sector_ret3=sr, members=members)
+                                   sector_ret3=sr, members=members,
+                                   misses=live.dive_zone_misses(ohlcv["Close"].columns))
 
 
 def leader_dip_tab():
@@ -415,7 +416,8 @@ def leader_dip_tab():
         "<div class='sf-note'><b>Dive Zone</b>, SharkFin's swing system and the one behind Top Performers → Swing "
         "setups. It buys a sharp two-day drop (2-day RSI under 10) in a stock that is above its 200-day average and "
         "among the 30% strongest in the S&amp;P 500 over 6 months, if it has at least one quality point (a deep dip, a "
-        "stock well off its high, a sector selloff or VIX above 20), with a limit order 3% under the signal close. It "
+        "stock well off its high, a sector selloff or VIX above 20), and it has not missed earnings estimates in "
+        "the last 30 trading days, with a limit order 3% under the signal close. It "
         "sells at a profit target of the signal close + 1.5 ATR, or at the next open once the 2-day RSI closes above 70, "
         "the stock closes under its 200-day, or 10 days pass. It opens trades while SPY is above its 200-day or VIX is "
         "above 25, holds 7 at a time, and parks idle cash in SPY. Strategy Playbook explains why it works.</div>",

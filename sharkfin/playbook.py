@@ -33,11 +33,12 @@ COLORS = {LD: "#2dd4a3", BR: "#4ea8ff", "Both (70 / 30)": "#f5a524", "S&P 500 (S
 
 # Graded on Oct 13 2021 - Nov 6 2026 (out of sample; trade stats from the lab's own trade lists).
 FACTS = {
-    LD: {"return": 0.276, "sharpe": 1.13, "worst": -0.225, "win": 0.64, "edge": 0.015, "avg_win": 0.054,
-         "avg_loss": -0.055, "payoff": 0.99, "pf": 1.74, "trades_yr": 98, "hold": "5 days", "y2022": -0.065,
-         "nov2026": -0.204, "older": "16.2% a year in 2006-12, worst drop 18%, while SPY lost half in 2008",
-         "stress": "18.8% a year, Sharpe 0.77, with fills 0.25% worse on every buy and sell",
-         "before_crash": "34.1% a year, Sharpe 1.43, worst drop 18% (to Oct 12 2026)"},
+    # With the Nov 2026 no-recent-earnings-miss check (edge_lab.publish_dive_zone); before it: 27.6% a year, Sharpe 1.13.
+    LD: {"return": 0.289, "sharpe": 1.18, "worst": -0.227, "win": 0.64, "edge": 0.016, "avg_win": 0.054,
+         "avg_loss": -0.055, "payoff": 0.99, "pf": 1.80, "trades_yr": 96, "hold": "5 days", "y2022": -0.068,
+         "nov2026": -0.205, "older": "16.3% a year in 2006-12, worst drop 18%, while SPY lost half in 2008",
+         "stress": "20.3% a year, Sharpe 0.83, with fills 0.25% worse on every buy and sell",
+         "before_crash": "35.4% a year, Sharpe 1.49, worst drop 19% (to Oct 12 2026)"},
     BR: {"return": 0.289, "sharpe": 0.95, "worst": -0.306, "win": 0.48, "edge": 0.111, "avg_win": 0.36,
          "avg_loss": -0.118, "payoff": 3.0, "pf": 2.80, "trades_yr": 29, "hold": "about 3 months", "y2022": -0.262,
          "nov2026": -0.133, "older": "4.7% a year in 2006-12",
@@ -45,7 +46,7 @@ FACTS = {
          "before_crash": "33.2% a year, Sharpe 1.07 (to Oct 12 2026)"},
     "S&P 500 (SPY)": {"return": 0.125, "sharpe": 0.56, "worst": -0.245, "y2022": -0.182, "nov2026": -0.055},
     "Nasdaq-100 (QQQ)": {"return": 0.135, "sharpe": 0.50, "worst": -0.351, "y2022": -0.326, "nov2026": -0.121},
-    "Both (70 / 30)": {"return": 0.290, "sharpe": 1.20, "worst": -0.197, "y2022": -0.125},
+    "Both (70 / 30)": {"return": 0.296, "sharpe": 1.23, "worst": -0.197, "y2022": -0.133},
 }
 
 

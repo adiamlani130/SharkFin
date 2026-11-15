@@ -178,10 +178,12 @@ def stock_status(ohlcv: pd.DataFrame, reference_gains: pd.Series | None = None,
 def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None = None, slots: int = SLOTS,
              cost_bps: float = COST_BPS, start=None, market_close: pd.Series | None = None,
              breakout_days: int = BREAKOUT_DAYS, adx_min: float = ADX_MIN, members: pd.DataFrame | None = None,
-             liquidate: bool = False, entry_ok: pd.Series | None = None) -> dict:
+             liquidate: bool = False, entry_ok: pd.Series | None = None,
+             buy_ok: pd.DataFrame | None = None) -> dict:
     """Replay Tech Breakout Rider on a panel of tech stocks {"Open"|"High"|"Low"|"Close": dates x tickers}.
     One fixed set of settings over the whole span is an in-sample test: use ``walk_forward`` for
-    out-of-sample results."""
+    out-of-sample results. ``buy_ok`` (dates x tickers, known at each close) is an extra stock-by-stock filter
+    on new trades, used to test confluences."""
     C = ohlcv["Close"].astype(float).sort_index().dropna(axis=1, how="all")
     dates = C.index
     panel = {f: ohlcv[f].reindex(index=dates, columns=C.columns).astype(float) for f in ("Open", "High", "Low")}
@@ -197,6 +199,8 @@ def backtest(ohlcv: dict, qqq_close: pd.Series, tbill_yields: pd.Series | None =
     if len(dates) - t0 < 30:
         raise ValueError("Not enough price history for a Breakout Rider backtest (needs about a year).")
     sig = signal_frames(panel, breakout_days, adx_min, members)
+    if buy_ok is not None:
+        sig["buy"] = sig["buy"] & buy_ok.reindex(index=dates, columns=C.columns).fillna(False).astype(bool)
     run = swing_engine.run(panel, sig["buy"], sig["score"], gate, rf, exit_signal=sig["exit"], limit=sig["limit"],
                            max_days=MAX_DAYS, slots=slots, cost_bps=cost_bps, t0=t0, exit_label="21 EMA under 50 EMA",
                            liquidate=liquidate)
