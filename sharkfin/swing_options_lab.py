@@ -330,3 +330,42 @@ def breakout_calls(folder: Path) -> pd.DataFrame:
             rec[label] = (p1 - p0 - OPT_SPREAD * (p0 + p1)) / p0 if p0 > 0 else np.nan
         rows.append(rec)
     return pd.DataFrame(rows)
+
+
+# ------------------------------------------------- the app's two strategies, shares vs options vs hedged
+
+def trade_options(folder: Path, kind: str) -> pd.DataFrame:
+    """Every app trade (Dive Zone or Breakout Rider, 2006-2026) replayed with options, priced at IV = 0.98 x
+    trailing 60-day realised vol at entry and at exit (only past data each time). Returns per-trade returns."""
+    from sharkfin.bs import bs_price
+    fn = "dive_zone_trades" if kind == "dz" else "breakout_trades"
+    t = pd.read_csv(Path(__file__).parent / "research_data" / "growth_lab" / f"{fn}.csv", parse_dates=["Bought", "Sold"])
+    px = pd.read_pickle(folder / "trade_px.pkl")
+    rv = np.log(px).diff().rolling(60).std() * math.sqrt(252)
+    specs = ({"call 1m ATM": (30, 1.0, 1), "call 2m ATM": (60, 1.0, 1), "put 1m ATM sold": (30, 1.0, -1)} if kind == "dz"
+             else {"call 5m ATM": (150, 1.0, 1), "call 8m ATM": (240, 1.0, 1), "call 8m 10% ITM": (240, 0.9, 1)})
+    rows = []
+    for r in t.itertuples():
+        s = r.Symbol.replace(".", "-")
+        if s not in px or r.Bought not in px.index or r.Sold not in px.index:
+            continue
+        before = px.index[px.index < r.Bought]
+        before_sell = px.index[px.index < r.Sold]
+        if not len(before) or not len(before_sell):
+            continue
+        S0, S1 = px[s][r.Bought], px[s][r.Sold]
+        v0 = max(IV_TO_RV * rv[s][before[-1]], 0.15)
+        v1 = max(IV_TO_RV * rv[s][before_sell[-1]], 0.15)
+        held = (r.Sold - r.Bought).days
+        rec = {"sym": s, "bought": r.Bought, "sold": r.Sold, "shares": r.Return}
+        for label, (dte, mny, cp) in specs.items():
+            K = S0 * mny
+            p0 = float(bs_price(S0, K, dte / 365, v0, cp))
+            p1 = float(bs_price(S1, K, max(dte - held, 0) / 365, v1, cp))
+            cost = OPT_SPREAD * (p0 + p1)
+            if cp > 0:
+                rec[label] = (p1 - p0 - cost) / p0
+            else:  # cash-secured short put: return on the strike held in cash
+                rec[label] = (p0 - p1 - cost) / K
+        rows.append(rec)
+    return pd.DataFrame(rows)

@@ -72,3 +72,44 @@ The test held Dive Zone, QQQ or SPY all the time and added 1-month S&P puts (5% 
 
 - This note: `docs/SWING_OPTIONS.md (copy in the project files folder)`. Tables are in `/mnt/project-files/sharpe-hunt/results/`: pairs, hedges, shock categories, Breakout calls and the swing option trades.
 - Code: `sharkfin/swing_options_lab.py` (pairs, hedges, news shocks with headline tags, Breakout calls, real-price option replays).
+
+---
+
+## Follow-up: how often the two app strategies trade, and what options and hedges do to them
+
+### How often they trade (2006-2026 backtests)
+
+| Strategy | Trades a year | Typical hold | Positions open at once |
+| --- | --- | --- | --- |
+| Dive Zone | About 63 (40 in the quietest year, 144 in the busiest) | 5 days | 1.7 on average, up to 12; in a trade 59% of days |
+| Tech Breakout Rider | About 31 (13 to 36) | 63 days | 7.5 on average, up to 12; in a trade 93% of days |
+
+The "17 trades" earlier was only the Breakout trades from 2024-26 that had real long-dated option prices on both the buy and sell days. Breakout made 73 trades in that span, and 608 since 2006.
+
+### Shares vs options vs hedged, as a whole portfolio
+
+The test took each app trade and swapped the shares for options, with the rest of the slot left in the app's usual place for idle money. Short-dated option prices are corrected to match real prices. On 312 real Dive Zone trades, plain Black-Scholes was far too generous: +8.9% a trade against -1.2% real. Breakout's long-dated calls are scaled to match the 17 real trades (x0.52). Hedges are 1-month 5% out-of-the-money S&P puts, bought only when the S&P is under its 200-day. Results are measured on monthly returns (Sharpe is a bit higher than on daily data).
+
+| Version | 2006-21: yearly / Sharpe / worst drop | 2021-26: yearly / Sharpe / worst drop |
+| --- | --- | --- |
+| **Dive Zone, shares (app)** | **20.5% / 1.48 / -18%** | **27.6% / 1.26 / -23%** |
+| Dive Zone, sell 1-month put instead | 8.7% / 0.70 / -26% | 9.3% / 0.47 / -26% |
+| Dive Zone, 1-month calls (half a slot) | 14.3% / 0.48 / -82% | -24.2% / -0.40 / -80% |
+| Dive Zone + 200-day put hedge | 19.2% / 1.38 / -17% | 26.9% / 1.21 / -23% |
+| **Breakout, shares (app)** | **14.7% / 0.80 / -29%** | **28.9% / 0.91 / -31%** |
+| Breakout, 8-month calls with a quarter of the slot | 8.2% / 0.45 / -42% | 16.0% / 0.56 / -39% |
+| Breakout, 8-month calls with half the slot | 18.5% / 0.81 / -45% | 44.3% / 1.14 / -33% |
+| Breakout shares + 200-day put hedge | 13.0% / 0.71 / -33% | 27.9% / 0.87 / -30% |
+| 50/50 Dive Zone shares + Breakout calls (quarter slot) | 14.5% / 0.96 / -25% | 22.9% / 1.10 / -19% |
+| SPY buy and hold | 10.4% / 0.67 / -55% | 12.5% / 0.59 / -25% |
+
+What it means:
+
+- **Dive Zone should stay in shares.** Its trades last 5 days, and short options lose to decay and spreads in that time. Calls were a disaster and selling puts gave up two thirds of the return.
+- **Breakout calls only beat shares at half a slot**, giving more return (44% vs 29% a year from 2021-26, Sharpe 1.14 vs 0.91) with bigger drops in 2006-21 (-45% vs -29%). At a quarter slot they trail shares. The correction behind this rests on only 17 real trades, so treat it as "maybe a bit better, with more pain", not a clear win.
+- **The 200-day put hedge doesn't pay on either strategy.** It trims about 1 point a year and barely changes the worst drop, because both strategies' big losses come when the S&P is still above its 200-day.
+- **The other strategies we tested, with options:**
+  - The 0DTE iron fly/condor is already an options trade: Sharpe about 2 in 2025-26, daily.
+  - After big news days, selling puts made about the same as shares (+2.3-2.7% vs +3% in 20 days) with a higher win rate (78% vs 58-64%).
+  - Earnings drift calls and calls before earnings didn't hold up.
+  - Keynote calls looked good on only 18 trades.
