@@ -21,6 +21,7 @@ ALLOWED_NEGATIVE_SHIFTS = {
     "sharkfin/edge_lab.py": 2,      # ranking IC: the next 1 and 3 months' returns being graded
     "sharkfin/growth_lab.py": 2,    # fear studies: the next session's open as the fill price / holding return
     "sharkfin/catalyst_lab.py": 1,  # _forward: a signal's later return, used only to grade it
+    "sharkfin/neuro_lab.py": 4,     # fitness targets: next opens a position is filled at and exits at
 }
 
 
