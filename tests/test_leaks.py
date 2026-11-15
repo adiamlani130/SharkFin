@@ -20,6 +20,7 @@ ALLOWED_NEGATIVE_SHIFTS = {
     "sharkfin/forecasting.py": 1,   # training target, purged so it ends before the forecast origin
     "sharkfin/growth_lab.py": 2,    # fear studies: the next session's open as the fill price / holding return
     "sharkfin/catalyst_lab.py": 1,  # _forward: a signal's later return, used only to grade it
+    "sharkfin/sharpe_lab.py": 3,    # calendar only: whether the next session is a turn-of-month / month-end day
 }
 
 
