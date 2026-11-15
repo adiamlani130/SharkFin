@@ -294,9 +294,9 @@
     "semantic_hash": "357e67fbbda5c07a9e80ba314d552ffd"
   },
   "tests/test_leaks.py": {
-    "mtime": 1794685802.7672641,
-    "seen": 1794701265.4994578,
-    "ast_hash": "cd240829b137dc7f3b29af3f7b31790f",
+    "mtime": 1794701423.024377,
+    "seen": 1794703653.075628,
+    "ast_hash": "ef1497225b7c4906f9ebb93c29009edb",
     "semantic_hash": ""
   },
   "app_pages/speculation.py": {
@@ -585,6 +585,18 @@
     "mtime": 1794701260.426646,
     "seen": 1794701265.4994764,
     "ast_hash": "d6e49947e3ff44e9aa740150f0a82ec2",
+    "semantic_hash": ""
+  },
+  "sharkfin/swing_options_lab.py": {
+    "mtime": 1794702936.460858,
+    "seen": 1794703653.075607,
+    "ast_hash": "00f2715d7063c942146b8dccb6d8fca0",
+    "semantic_hash": ""
+  },
+  "docs/SWING_OPTIONS.md": {
+    "mtime": 1794703640.146216,
+    "seen": 1794703653.075646,
+    "ast_hash": "0322c90ec16b1a8177a31d0412305792",
     "semantic_hash": ""
   }
 }
