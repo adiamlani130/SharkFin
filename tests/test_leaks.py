@@ -22,6 +22,7 @@ ALLOWED_NEGATIVE_SHIFTS = {
     "sharkfin/growth_lab.py": 2,    # fear studies: the next session's open as the fill price / holding return
     "sharkfin/catalyst_lab.py": 1,  # _forward: a signal's later return, used only to grade it
     "sharkfin/neuro_lab.py": 4,     # fitness targets: next opens a position is filled at and exits at
+    "sharkfin/frontier.py": 3,      # forward paper record: the next open/close a frozen signal is filled at
 }
 
 
