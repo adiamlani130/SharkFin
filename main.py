@@ -60,6 +60,9 @@ pages = {
         st.Page("app_pages/playbook.py", title="Strategy Playbook"),
         st.Page("app_pages/strategy_lab.py", title="Strategy Lab"),
     ],
+    "Experimental": [
+        st.Page("app_pages/frontier_lab.py", title="Frontier Lab", icon="🧪"),
+    ],
     "Ideas": [
         st.Page("app_pages/speculation.py", title="Speculation Radar"),
     ],
