@@ -40,8 +40,11 @@ replace a saved portfolio with an empty one.
 3. Go to **Project Settings → API Keys**. Copy the **Project URL** and a **secret** key (starts with `sb_secret_`).
    On older projects this is the `service_role` key. Never put this key in the repo or in browser code.
 
-Free projects pause after about a week with no activity. Normal use keeps the project awake, and the daily alerts
-job we're building next will also ping it.
+Free projects pause after about a week with no activity. The **Keep Supabase awake** GitHub Action
+(`.github/workflows/keep-supabase-awake.yml`) reads from and writes a heartbeat row to the table every 2 days, so the
+project stays active even when nobody signs in. It uses the repository secrets `SUPABASE_URL` and `SUPABASE_KEY`
+(the same values as `[supabase]` below, also used by the daily alerts job). You can run it by hand from the
+**Actions** tab, and GitHub emails you if a run fails.
 
 ## 2. Google sign-in (about 5 minutes)
 
