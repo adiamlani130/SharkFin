@@ -1,0 +1,56 @@
+# Keeps the free Supabase project from being paused for inactivity (free projects pause after ~7 days idle).
+# Every 2 days it reads from the sharkfin_user_data table and upserts one heartbeat row, so the database sees
+# real read and write traffic. It needs no Python or pip, so it finishes in a few seconds.
+#
+# Repository secrets used (Settings -> Secrets and variables -> Actions), the same ones the daily alerts job uses:
+#   SUPABASE_URL  - the app's [supabase] url, e.g. https://xxxx.supabase.co
+#   SUPABASE_KEY  - the app's [supabase] key (sb_secret_... / service_role). RLS blocks the public anon key.
+#
+# The heartbeat row is user_id "_keepalive", name "heartbeat". The app never loads that name, so no user sees it.
+# If a run fails, GitHub emails the repo owner, which is the early warning before a pause.
+name: Keep Supabase awake
+
+on:
+  schedule:
+    - cron: "17 14 */2 * *"   # about every 2 days at 14:17 UTC (odd minute: top-of-hour cron runs get delayed most)
+  workflow_dispatch:
+
+concurrency:
+  group: keep-supabase-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Read and write to Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SUPABASE_URL}" ] || [ -z "${SUPABASE_KEY}" ]; then
+            echo "::error::Add the SUPABASE_URL and SUPABASE_KEY repository secrets (see the comment at the top of this file)."
+            exit 1
+          fi
+          base="${SUPABASE_URL%/}/rest/v1/sharkfin_user_data"
+          call() {  # call <label> <curl args...>: retries twice, prints only the HTTP status
+            local label="$1"; shift
+            for attempt in 1 2 3; do
+              code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H "apikey: ${SUPABASE_KEY}" -H "Authorization: Bearer ${SUPABASE_KEY}" "$@" || true)
+              echo "${label}: HTTP ${code} (attempt ${attempt})"
+              case "$code" in 2*) return 0 ;; esac
+              sleep $((attempt * 20))
+            done
+            echo "::error::${label} failed with HTTP ${code}. Check the secrets, and whether the project is already paused."
+            return 1
+          }
+          call "Read" -G "${base}" --data-urlencode "select=user_id" --data-urlencode "limit=1"
+          now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          call "Write heartbeat" -X POST "${base}?on_conflict=user_id,name" \
+            -H "Content-Type: application/json" -H "Prefer: resolution=merge-duplicates,return=minimal" \
+            --data "[{\"user_id\":\"_keepalive\",\"name\":\"heartbeat\",\"data\":[{\"at\":\"${now}\"}],\"updated_at\":\"${now}\"}]"
+          echo "Supabase is awake (${now})."
