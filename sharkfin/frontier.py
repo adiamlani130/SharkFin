@@ -1,6 +1,6 @@
-"""Frontier Lab: the app-side engine behind ``app_pages/frontier_lab.py``.
+"""Frontier Lab research engine (research only; the Frontier Lab page was removed from the app in Nov 2026).
 
-Experimental research, shown in the app. It reads the frozen research results in ``research_data/frontier``
+It reads the frozen research results in ``research_data/frontier``
 (written by ``sharkfin/frontier_build.py``) and computes three live things from prices with rules that were
 frozen on Nov 16 2026:
 

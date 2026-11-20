@@ -1,4 +1,4 @@
-"""Builds the precomputed data behind the Frontier Lab page (``app_pages/frontier_lab.py``).
+"""Builds the precomputed Frontier Lab research data read by ``sharkfin/frontier.py``.
 
 Research tooling, not imported by the app. Run the steps in order::
 
